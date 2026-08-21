@@ -1,0 +1,33 @@
+[package]
+name = "ponos"
+version = "0.1.0"
+edition = "2024"
+description = "Luau-scripted multi-agent orchestration over the Agent Client Protocol"
+license = "MIT"
+
+[[bin]]
+name = "ponos"
+path = "src/main.rs"
+
+# Test fixture: a scriptable ACP agent used by the integration test suite.
+# Not part of the user-facing CLI surface.
+[[bin]]
+name = "mock-agent"
+path = "src/bin/mock-agent/main.rs"
+
+[dependencies]
+agent-client-protocol = { version = "1.3", features = ["unstable_end_turn_token_usage"] }
+clap = { version = "4.6", features = ["derive"] }
+libc = "0.2"
+mlua = { version = "0.12", features = ["luau", "async", "serialize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3"
+async-process = "2"
+
+[dev-dependencies]
+tempfile = "3"

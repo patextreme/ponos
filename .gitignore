@@ -1,0 +1,7 @@
+/target
+/result
+/result-*
+/worktrees
+.direnv
+.work
+.pi/taskflows
