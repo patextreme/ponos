@@ -27,10 +27,18 @@ fn write_script(dir: &std::path::Path, body: &str) -> PathBuf {
 }
 
 fn run(script: &std::path::Path, dir: &std::path::Path) -> RunOutcome {
+    run_with_registry(script, dir, Registry::from_parts(None, None).unwrap())
+}
+
+fn run_with_registry(
+    script: &std::path::Path,
+    dir: &std::path::Path,
+    registry: Registry,
+) -> RunOutcome {
     let cfg = RunConfig {
         script_path: script.to_path_buf(),
         invocation_dir: dir.to_path_buf(),
-        registry: Registry::from_parts(None, None).unwrap(),
+        registry,
         renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -290,6 +298,57 @@ pcall(function() return t:await() end)
     let out = run(&script, &dir);
     assert_eq!(out.code, 0, "error: {:?}", out.error);
     assert!(out.undelivered_errors.is_empty());
+}
+
+#[test]
+fn default_session_cwd_is_invocation_dir() {
+    // CLI spec "Session cwd defaults to invocation directory": a session
+    // created without `cwd` runs in the invocation directory (the mock
+    // echoes its session cwd).
+    let dir = tmpdir("cwd");
+    let script = write_script(
+        &dir,
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{ MOCK_ECHO_CWD = "1" }} }})
+local s = agent:session()
+local r = s:prompt("where am I")
+assert(r.text == "{expected}", "cwd was " .. tostring(r.text))
+s:close()
+"#,
+            mock = mock_agent(),
+            expected = dir.display()
+        ),
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn two_agent_calls_same_name_give_independent_factories() {
+    // Scripting spec "Agent and session API": two ponos.agent calls for the
+    // same name return independent factory objects (independent s1/s2
+    // counters, distinct sessions).
+    let dir = tmpdir("factories");
+    let project_config = format!("[agents.mock]\ncommand = \"{}\"\n", mock_agent());
+    let registry = Registry::from_parts(None, Some(project_config.as_str())).unwrap();
+    let script = write_script(
+        &dir,
+        r#"
+local f1 = ponos.agent("mock")
+local f2 = ponos.agent("mock")
+assert(f1 ~= f2, "factories must be distinct objects")
+local s1 = f1:session()
+local s2 = f2:session()
+assert(s1:label() == "mock/s1", s1:label())
+assert(s2:label() == "mock/s1", s2:label())
+assert(s1 ~= s2, "sessions must be distinct objects")
+s1:close()
+s2:close()
+"#,
+    );
+    let out = run_with_registry(&script, &dir, registry);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
 }
 
 #[test]

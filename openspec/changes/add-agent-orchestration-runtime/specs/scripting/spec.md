@@ -7,10 +7,10 @@ Defines the Luau scripting environment embedded in ponos: the sandboxed standard
 ## ADDED Requirements
 
 ### Requirement: Sandboxed Luau environment
-Scripts SHALL execute in a sandboxed Luau environment exposing only: `string`, `table`, `math`, `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, and `print`. The environment MUST NOT expose file I/O, subprocess execution, network, or debug facilities. Scripts have no host filesystem or network access beyond driving agents.
+Scripts SHALL execute in a sandboxed Luau environment exposing only: `string`, `table`, `math`, `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, `print`, and a restricted `coroutine` table containing only `yield` (retained because the embedded async runtime requires it; all coroutine scheduling primitives MUST remain absent). The environment MUST NOT expose file I/O, subprocess execution, network, or debug facilities. Scripts have no host filesystem or network access beyond driving agents.
 
 #### Scenario: Sandboxed globals
-- **WHEN** a script accesses `io`, `os.execute`, or `debug`
+- **WHEN** a script accesses `io`, `os.execute`, `debug`, or `coroutine.create`
 - **THEN** the access resolves to nil (or raises an error on call) because the globals are absent
 
 #### Scenario: Print passthrough
@@ -38,6 +38,10 @@ The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an age
 #### Scenario: Default session labels
 - **WHEN** two sessions are created without `id` from the same agent factory
 - **THEN** they are labeled `s1` and `s2` respectively in output attribution
+
+#### Scenario: Independent factories
+- **WHEN** `ponos.agent("claude")` is called twice with the same name and each factory creates a session
+- **THEN** the factories keep independent session counters: both first sessions are labeled `claude/s1`
 
 #### Scenario: Unknown agent name
 - **WHEN** `ponos.agent("nope")` is called and `nope` exists in no registry

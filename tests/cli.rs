@@ -170,6 +170,26 @@ s:prompt("hi")
 }
 
 #[test]
+fn usage_update_renders_context_line() {
+    // agent-sessions spec: `usage_update` carries context-window used/size
+    // and is rendered for display (token counts come from the prompt
+    // response and are asserted in the acp tests).
+    let project = Project::new("usage", &[("MOCK_USAGE", "5,10,2,3")]);
+    let script = project.script(
+        r#"
+local s = ponos.agent("mock"):session()
+s:prompt("hi")
+"#,
+    );
+    let (code, stdout, _) = project.run(&script, &[]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(
+        stdout.contains("context: 5/10 tokens"),
+        "usage_update not rendered:\n{stdout}"
+    );
+}
+
+#[test]
 fn exit_code_propagates() {
     let project = Project::new("exit", &[]);
     let script = project.script("ponos.exit(3)");

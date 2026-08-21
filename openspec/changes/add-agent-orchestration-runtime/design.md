@@ -33,7 +33,7 @@ src/
   render/        # stdout streaming renderer (prefix + color, flag handling)
   task.rs        # spawn/join/map/sleep runtime on tokio
 tests/           # integration tests driving the mock agent
-fixtures/mock-agent/  # standalone ACP agent binary used by tests
+src/bin/mock-agent/   # scriptable ACP agent fixture (a [[bin]] target of the same crate)
 ```
 
 One crate for v1; split only when a second consumer appears. *Alternative:* cargo workspace — rejected, overhead without benefit yet.
@@ -66,7 +66,7 @@ Renderer receives `(session_label, event)` and writes prefixed lines: `[claude/s
 
 ### D6: Testing — mock agent as first-class fixture
 
-`fixtures/mock-agent` is a small binary implementing the agent side of ACP with scriptable behavior: echo prompts, configurable chunk streams/delays, tool-call updates, cancellation compliance, and a mode to request a permission (asserting ponos denies). Integration tests spawn it via `ponos run`-equivalent in-process entry points. Unit tests cover config resolution, require resolution, and task semantics. Real adapters (claude-agent-acp etc.) are manual smoke checks only.
+`src/bin/mock-agent` is a small binary implementing the agent side of ACP with scriptable behavior: echo prompts, configurable chunk streams/delays, tool-call updates, cancellation compliance, and a mode to request a permission (asserting ponos denies). It lives as a cargo `[[bin]]` target of the single crate (rather than a separate `fixtures/` crate) so it shares one dependency graph and builds with the workspace. Integration tests spawn it via `ponos run`-equivalent in-process entry points. Unit tests cover config resolution, require resolution, and task semantics. Real adapters (claude-agent-acp etc.) are manual smoke checks only.
 
 ### D7: Nix — flake-parts with per-concern modules
 
