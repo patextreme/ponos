@@ -41,9 +41,10 @@ appear, and sandbox violations become type errors at edit time.
   sync guards keeping them honest against the runtime.
 
 ### Modified Capabilities
-
-(none — `openspec/specs/` is empty; the CLI change rides within the new
-capability rather than modifying un-archived delta specs)
+- `cli`: relaxes the "only subcommand" clause of the run-subcommand
+  requirement so the command surface can admit further subcommands —
+  `ponos types` here, specified under `type-definitions` alongside its
+  content contract.
 
 ## Impact
 
