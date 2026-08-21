@@ -38,7 +38,7 @@
 - [ ] 6.2 Implement relative require (custom `Require` over script dir, `.luau` resolution, caching, rejection of escaping paths); unit tests for sibling/missing/cached cases
 - [ ] 6.3 Implement task runtime: `ponos.spawn` → Task with `:await()` (error re-raise), `ponos.join`, `ponos.map` with `concurrency` (default unlimited), `ponos.sleep`; unit tests with fake async ops cover ordering, cap, contained errors, await re-raise
 - [ ] 6.4 Bind `ponos.agent`/`session`/`prompt`/`cancel`/`close` to the ACP layer (factory objects, default `s1,s2` labels, result table with `__tostring`, `usage`/`stop_reason`); integration test drives a full prompt turn against mock agent end-to-end from Luau
-- [ ] 6.5 Implement `ponos.log`, `ponos.exit`, `ponos.version`; script-end waits for outstanding tasks; integration tests cover pending-spawn wait, explicit exit code, and uncaught-error teardown (exit 1)
+- [ ] 6.5 Implement `ponos.log`, `ponos.exit`, `ponos.version`; script-end waits for outstanding tasks; integration tests cover pending-spawn wait, explicit exit code, uncaught-error teardown (exit 1), and never-retrieved task error failing the run (exit 1)
 
 ## 7. CLI surface
 

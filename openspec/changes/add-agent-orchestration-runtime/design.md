@@ -42,7 +42,7 @@ One crate for v1; split only when a second consumer appears. *Alternative:* carg
 
 The runtime creates one `Lua` instance with `luau` + `async` features, `Lua::sandbox(true)`, and a curated stdlib set. The entry chunk runs via `eval_async` inside a tokio runtime. Every blocking-looking API (`prompt`, `sleep`, `task:await`) is a `create_async_function` that awaits a tokio future; mlua yields the Luau coroutine while waiting, so other tasks (each their own coroutine) progress.
 
-Task bookkeeping: `ponos.spawn(fn)` wraps `fn` in a Lua coroutine, registers it in a task registry (id, coroutine, result/error slot, completion flag), and resumes it immediately — no tokio task per Lua task needed; resumption happens from the event loop as futures complete. `join`/`map` await completion flags. `map` schedules up to `concurrency` coroutines at once.
+Task bookkeeping: `ponos.spawn(fn)` wraps `fn` in a Lua coroutine, registers it in a task registry (id, coroutine, result/error slot, completion flag), and resumes it immediately — no tokio task per Lua task needed; resumption happens from the event loop as futures complete. `join`/`map` await completion flags. `map` schedules up to `concurrency` coroutines at once. Each task's error slot also tracks whether the error was ever delivered (observed via `await`/`join` or carried in `map` results); at script end, after draining, any never-delivered task error is printed to stderr and the run exits 1 — unhandled task errors are fatal (settled decision), and an earlier `ponos.exit(code)` overrides with its own code.
 
 *Alternative:* callback/event-driven API — rejected in design tree (Q2): sync-looking calls are the least surprising scripting model.
 
