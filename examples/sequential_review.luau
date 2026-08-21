@@ -1,3 +1,4 @@
+--!strict
 -- Sequential review: one session, one turn at a time.
 local agent = ponos.agent("demo")
 local s = agent:session({ id = "reviewer" })

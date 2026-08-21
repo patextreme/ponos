@@ -65,6 +65,49 @@ fn version_flag() {
 }
 
 #[test]
+fn types_prints_version_header_and_definitions() {
+    // `ponos types` must emit a one-line version header followed by the
+    // repo definitions byte-for-byte (spec: suitable for redirection).
+    let out = Command::new(ponos_bin()).arg("types").output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let (header, body) = stdout
+        .split_once('\n')
+        .unwrap_or_else(|| panic!("no header line: {stdout:?}"));
+    assert_eq!(
+        header,
+        format!("-- ponos {} type definitions", env!("CARGO_PKG_VERSION"))
+    );
+    let repo_defs = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("types/ponos.d.luau"),
+    )
+    .unwrap();
+    assert_eq!(body, repo_defs, "emitted defs must be byte-identical");
+}
+
+#[test]
+fn types_needs_no_registry_or_agents() {
+    // No script, no registry (empty HOME and cwd), no agent spawned: still
+    // succeeds. A spawned agent would need a registry entry to come from.
+    let dir = std::env::temp_dir().join(format!("ponos-cli-types-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let out = Command::new(ponos_bin())
+        .arg("types")
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.is_empty(), "expected no diagnostics: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("declare ponos"), "{stdout}");
+}
+
+#[test]
 fn missing_script_argument_is_usage_error() {
     let out = Command::new(ponos_bin()).arg("run").output().unwrap();
     assert_ne!(out.status.code(), Some(0));

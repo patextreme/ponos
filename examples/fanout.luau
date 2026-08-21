@@ -1,3 +1,4 @@
+--!strict
 -- Fan-out with a concurrency cap: at most 2 reviewers in flight.
 local agent = ponos.agent("demo")
 local s = agent:session({ id = "pool" })

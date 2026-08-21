@@ -36,27 +36,60 @@ enum Command {
         #[arg(long)]
         no_color: bool,
     },
+
+    /// Print the Luau type definitions for the ponos script API.
+    Types,
+}
+
+/// Luau type definitions for the `ponos` script API. Single source of
+/// truth: `types/ponos.d.luau`, embedded at compile time so the emitted
+/// definitions always match the installed binary.
+const TYPE_DEFINITIONS: &str = include_str!("../types/ponos.d.luau");
+
+/// What `Cli::try_parse_from` produced: dispatch early on subcommands that
+/// need no runtime setup.
+#[derive(Debug)]
+enum Parsed {
+    /// `ponos run` — full orchestration run.
+    Run {
+        script: PathBuf,
+        render: RenderOptions,
+        verbose: u8,
+    },
+    /// `ponos types` — print definitions, exit 0, touch nothing else.
+    Types,
 }
 
 /// Parse CLI arguments (unit-testable).
-fn parse(args: &[String]) -> Result<(PathBuf, RenderOptions, u8), clap::Error> {
+fn parse(args: &[String]) -> Result<Parsed, clap::Error> {
     let cli = Cli::try_parse_from(args)?;
-    let Command::Run {
-        script,
-        quiet,
-        verbose,
-        no_color,
-    } = cli.command;
-    Ok((
-        script,
-        RenderOptions {
+    Ok(match cli.command {
+        Command::Run {
+            script,
             quiet,
+            verbose,
             no_color,
-            verbose: verbose >= 1,
-            agent_stderr: verbose >= 2,
+        } => Parsed::Run {
+            script,
+            render: RenderOptions {
+                quiet,
+                no_color,
+                verbose: verbose >= 1,
+                agent_stderr: verbose >= 2,
+            },
+            verbose,
         },
-        verbose,
-    ))
+        Command::Types => Parsed::Types,
+    })
+}
+
+/// `ponos types`: print the definitions with a version header. Everything
+/// after line 1 is byte-identical to `types/ponos.d.luau`. Requires no
+/// script, registry, or agent configuration.
+fn print_types() -> ExitCode {
+    println!("-- ponos {} type definitions", crate::VERSION);
+    print!("{TYPE_DEFINITIONS}");
+    ExitCode::SUCCESS
 }
 
 /// Entry point: returns the process exit code.
@@ -64,7 +97,12 @@ pub fn main() -> ExitCode {
     let mut args: Vec<String> = vec!["ponos".to_string()];
     args.extend(std::env::args().skip(1));
     let (script, render_opts, verbose) = match parse(&args) {
-        Ok(parsed) => parsed,
+        Ok(Parsed::Run {
+            script,
+            render,
+            verbose,
+        }) => (script, render, verbose),
+        Ok(Parsed::Types) => return print_types(),
         Err(e) => {
             // --help / --version are "errors" that carry their own output
             // and exit code.
@@ -145,6 +183,14 @@ mod tests {
     }
 
     #[test]
+    fn types_subcommand_parses_without_run_arguments() {
+        match parse(&args(&["types"])).unwrap() {
+            Parsed::Types => {}
+            Parsed::Run { .. } => panic!("expected Types"),
+        }
+    }
+
+    #[test]
     fn missing_script_argument_is_a_usage_error() {
         let err = parse(&args(&["run"])).unwrap_err();
         assert!(!matches!(
@@ -164,16 +210,37 @@ mod tests {
 
     #[test]
     fn flags_parse() {
-        let (script, opts, v) = parse(&args(&["run", "s.luau"])).unwrap();
+        let Parsed::Run {
+            script,
+            render: opts,
+            verbose: v,
+        } = parse(&args(&["run", "s.luau"])).unwrap()
+        else {
+            panic!("expected Run")
+        };
         assert_eq!(script, PathBuf::from("s.luau"));
         assert!(!opts.quiet && !opts.no_color && !opts.verbose && !opts.agent_stderr);
         assert_eq!(v, 0);
 
-        let (_, opts, v) = parse(&args(&["run", "s.luau", "--quiet", "--no-color"])).unwrap();
+        let Parsed::Run {
+            render: opts,
+            verbose: v,
+            ..
+        } = parse(&args(&["run", "s.luau", "--quiet", "--no-color"])).unwrap()
+        else {
+            panic!("expected Run")
+        };
         assert!(opts.quiet && opts.no_color);
         assert_eq!(v, 0);
 
-        let (_, opts, v) = parse(&args(&["run", "s.luau", "-vv"])).unwrap();
+        let Parsed::Run {
+            render: opts,
+            verbose: v,
+            ..
+        } = parse(&args(&["run", "s.luau", "-vv"])).unwrap()
+        else {
+            panic!("expected Run")
+        };
         assert!(opts.verbose && opts.agent_stderr);
         assert_eq!(v, 2);
     }

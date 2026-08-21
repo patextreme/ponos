@@ -14,6 +14,7 @@ Scripts look synchronous — `reply = session:prompt("…")` blocks the script,
 not the runtime — so fan-outs, pipelines and watchdogs read like plain code.
 
 ```lua
+--!strict
 local claude = ponos.agent("claude")
 local s = claude:session({ id = "reviewer" })
 local r = s:prompt("Review src/main.rs for obvious bugs; be terse.")
@@ -42,6 +43,7 @@ cargo test             # full suite; integration tests use the mock agent only
 
 ```
 ponos run <script.luau> [--quiet] [--verbose] [-vv] [--no-color]
+ponos types
 ponos --version
 ```
 
@@ -49,6 +51,8 @@ ponos --version
 - `--verbose` — runtime lifecycle diagnostics
 - `-vv` — additionally pass agent subprocess stderr through
 - `--no-color` — drop ANSI colors, keep `[agent/session]` text prefixes
+- `ponos types` — print the Luau type definitions for the script API
+  (see [Editor setup](#editor-setup)); needs no registry, script, or agents
 
 Exit codes: `0` on success, `1` on an uncaught script error or a never-observed
 task error (printed to stderr), `2` on CLI/usage errors, and `n` when the script
@@ -122,6 +126,60 @@ modules relative to the requiring file and rejects paths escaping the script
 tree. (One deviation: a restricted `coroutine` table containing only `yield`
 remains visible because the embedded async runtime needs it; the scheduling
 primitives are absent.)
+
+## Editor setup
+
+Scripts get completion, hover, and type checking — plus sandbox violations
+flagged before a run — by pointing [luau-lsp](https://github.com/luau-lsp/luau-lsp)
+at ponos's type definitions:
+
+```sh
+ponos types > ponos.d.luau
+```
+
+`ponos types` emits definitions version-matched to the installed binary: a
+`-- ponos <version> type definitions` header followed by the file
+byte-for-byte. Start scripts with `--!strict` for full checking (the
+[bundled examples](examples/) do). The definitions also model the sandbox —
+`os` trimmed to `time`/`clock`, `coroutine` to `yield`, and
+`loadstring`/`collectgarbage` unavailable — so editor-approved code cannot
+reach a global the runtime poisons. Definitions apply workspace-wide, so
+keep them out of mixed Luau projects you don't run under ponos.
+
+The repo deliberately commits no editor or Luau configuration — configure
+your own (VS Code luau-lsp extension settings; "standard" platform, not
+Roblox):
+
+```jsonc
+{
+  "luau-lsp.platform.type": "standard",
+  "luau-lsp.types.definitionFiles": ["ponos.d.luau"]
+}
+```
+
+Neovim (nvim-lspconfig equivalent):
+
+```lua
+require("lspconfig").luau_lsp.setup({
+  settings = {
+    ["luau-lsp"] = {
+      platform = { type = "standard" },
+      types = { definitionFiles = { "ponos.d.luau" } },
+    },
+  },
+})
+```
+
+Known residuals of the definitions (none affect execution):
+
+- generic `ponos.map` callbacks occasionally need an explicit parameter
+  annotation (`function(item: string) …`) for the item type to propagate;
+- the `tostring(r)` prompt-result sugar is not covered by the definitions —
+  use `r.text` where the type checker wants a string;
+- outcome narrowing (`if entry.ok then entry.value …`) works on locals —
+  bind the outcome entry to a variable first;
+- the require-tree restriction (no paths escaping the script directory) is
+  enforced at runtime only.
 
 ## Examples
 

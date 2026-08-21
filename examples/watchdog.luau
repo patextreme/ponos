@@ -1,3 +1,4 @@
+--!strict
 -- Watchdog cancel: a slow turn is cancelled after a grace period; the
 -- prompt returns normally with stop_reason == "cancelled".
 local agent = ponos.agent("demo")
