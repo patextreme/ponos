@@ -1,0 +1,92 @@
+# Scripting Spec
+
+## Purpose
+
+Defines the Luau scripting environment embedded in ponos: the sandboxed standard library, module resolution, the `ponos` API namespace, concurrency primitives, and error/cancellation semantics observable by script authors.
+
+## ADDED Requirements
+
+### Requirement: Sandboxed Luau environment
+Scripts SHALL execute in a sandboxed Luau environment exposing only: `string`, `table`, `math`, `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, and `print`. The environment MUST NOT expose file I/O, subprocess execution, network, or debug facilities. Scripts have no host filesystem or network access beyond driving agents.
+
+#### Scenario: Sandboxed globals
+- **WHEN** a script accesses `io`, `os.execute`, or `debug`
+- **THEN** the access resolves to nil (or raises an error on call) because the globals are absent
+
+#### Scenario: Print passthrough
+- **WHEN** a script calls `print("hello")`
+- **THEN** the line is written to ponos's standard output unmodified, without session prefixes
+
+### Requirement: Relative module resolution
+Scripts SHALL be able to `require` modules by relative path from the requiring file's directory (e.g. `require("./lib/pipeline")`, resolving `.luau` files). Absolute paths or paths escaping the script tree MUST be rejected with a Lua error.
+
+#### Scenario: Sibling module
+- **WHEN** a script at `main.luau` requires `./lib/util` and `lib/util.luau` exists
+- **THEN** the module is loaded and its return value provided; a second require of the same path returns the cached module
+
+#### Scenario: Missing module
+- **WHEN** a script requires a path that does not resolve to an existing `.luau` file
+- **THEN** the require call raises a Lua error naming the unresolved path
+
+### Requirement: Agent and session API
+The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), and `mcp_servers`. Two `ponos.agent` calls for the same name SHALL return independent factory objects.
+
+#### Scenario: Session creation
+- **WHEN** a script calls `ponos.agent("claude"):session({ id = "reviewer" })`
+- **THEN** a session labeled `claude/reviewer` exists and is ready to prompt
+
+#### Scenario: Default session labels
+- **WHEN** two sessions are created without `id` from the same agent factory
+- **THEN** they are labeled `s1` and `s2` respectively in output attribution
+
+#### Scenario: Unknown agent name
+- **WHEN** `ponos.agent("nope")` is called and `nope` exists in no registry
+- **THEN** a Lua error is raised naming the unresolved agent
+
+### Requirement: Prompt returns a result table
+`session:prompt(text, options?)` SHALL send one prompt turn and return a table with `text` (final agent message string), `stop_reason` (`"end_turn"`, `"max_tokens"`, `"max_turn_requests"`, `"refusal"`, or `"cancelled"`), and `usage` (`input`, `cache_read`, `cache_write`, `output` token counts, zero when unreported). The result table SHALL be directly string-coercible to `text` via `__tostring`. Options SHALL accept `timeout_ms`.
+
+#### Scenario: Successful turn
+- **WHEN** `local r = s:prompt("hi")` completes normally
+- **THEN** `r.text` is the agent's final message, `tostring(r)` equals `r.text`, and `r.stop_reason == "end_turn"`
+
+#### Scenario: Timeout is an error
+- **WHEN** `s:prompt("...", { timeout_ms = 50 })` exceeds its timeout
+- **THEN** the turn is cancelled via `session/cancel` and the call raises a catchable Lua timeout error
+
+### Requirement: Cancellation is control flow, not failure
+`session:cancel()` SHALL be callable while another task is blocked in `prompt` on that session; it sends `session/cancel`, and the awaiting `prompt` returns normally with `stop_reason = "cancelled"` rather than raising.
+
+#### Scenario: Watchdog cancel
+- **WHEN** task A is blocked in `s:prompt(...)` and task B calls `s:cancel()`
+- **THEN** task A's `prompt` returns a result with `stop_reason == "cancelled"` and no error is raised
+
+### Requirement: Task and concurrency primitives
+The `ponos` namespace SHALL provide: `ponos.spawn(fn)` returning a Task object with `:await()`, `ponos.join({task, ...})` waiting for all tasks, `ponos.map(items, fn, options?)` running `fn` per item with optional `concurrency` limit (default unlimited) and returning per-item outcome entries, and `ponos.sleep(ms)`. Awaiting an errored task SHALL re-raise its error at the await site. `ponos.map` results SHALL carry each item's success value or error without throwing wholesale.
+
+#### Scenario: Parallel fan-out
+- **WHEN** `ponos.map({1,2,3}, function(i) return s:prompt("q"..i) end)` runs
+- **THEN** all three prompts execute concurrently and results arrive in item order
+
+#### Scenario: Concurrency cap
+- **WHEN** `ponos.map(items, fn, { concurrency = 2 })` runs with 5 items
+- **THEN** at most 2 `fn` invocations are in flight simultaneously
+
+#### Scenario: Contained task error
+- **WHEN** one of three spawned tasks raises and the script joins all three
+- **THEN** the two successful values are available and the failed task's error is reported for its entry; other tasks are unaffected
+
+#### Scenario: Error re-raised at await
+- **WHEN** a spawned function raises an error and `task:await()` is called
+- **THEN** the original error is re-raised at the await call site
+
+### Requirement: Runtime helpers
+The `ponos` namespace SHALL provide `ponos.log(msg)` printing a `[ponos]`-prefixed diagnostic line to standard output, `ponos.exit(code)` terminating the run, `ponos.sleep(ms)` yielding the current task for the duration, and `ponos.version` (read-only version string).
+
+#### Scenario: Log attribution
+- **WHEN** a script calls `ponos.log("starting")`
+- **THEN** output shows `[ponos] starting` on its own line
+
+#### Scenario: Sleep yields
+- **WHEN** task A calls `ponos.sleep(100)` while task B prompts
+- **THEN** task B progresses during A's sleep
