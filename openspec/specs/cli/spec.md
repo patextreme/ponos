@@ -7,7 +7,7 @@ Defines the user-facing command surface of the ponos binary: how scripts are inv
 ## Requirements
 
 ### Requirement: Run subcommand executes a script
-The `ponos` CLI SHALL provide `ponos run <script.luau>` as its only subcommand, where `<script.luau>` is a positional required path to the entry Luau script.
+The `ponos` CLI SHALL provide `ponos run <script.luau>`, where `<script.luau>` is a positional required path to the entry Luau script.
 
 #### Scenario: Successful run
 - **WHEN** `ponos run script.luau` is invoked and the script completes without uncaught errors
