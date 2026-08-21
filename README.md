@@ -1,5 +1,10 @@
 # ponos
 
+> **Name origin:** *Ponos* (Πόνος) is the Greek spirit of toil, labor, and
+> drudgery. Nothing here escapes that fate: `ponos` turns the mechanical task
+> of driving AI agents into plain, scripted code — the runtime does the heavy
+> lifting, and your agents carry the load.
+
 Luau-scripted multi-agent orchestration over the
 [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
 
