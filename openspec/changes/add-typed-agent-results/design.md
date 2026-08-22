@@ -49,7 +49,7 @@ Luau→JSON: the schema table converts via mlua serialization (`LuaSerdeExt`, al
 
 ### D5: Permissions — allow-all, every session, `AllowAlways`
 
-ACP `ToolCall` carries no tool name (only id, agent-written `title`, kind, raw input/output), so per-tool identification is impossible at the protocol level; heuristics on titles are unreliable both ways. Since ponos is headless — there is never a human to ask, and a denied tool silently degrades output — every `session/request_permission` gets the first `AllowAlways` option (user decision, generalizing beyond result sessions). This replaces the deny-all `-32601` dispatch for permission requests only; elicitation/fs/terminal stay unsupported-error. If an agent offers only reject options or none, respond with the unsupported-method error (cannot select an allow that doesn't exist). Documented consequence: `AllowAlways` may persist allow rules in the agent's own settings beyond the run — usually desirable for headless/CI, stated plainly in the README.
+ACP `ToolCall` carries no tool name (only id, agent-written `title`, kind, raw input/output), so per-tool identification is impossible at the protocol level; heuristics on titles are unreliable both ways. Since ponos is headless — there is never a human to ask, and a denied tool silently degrades output — every `session/request_permission` gets an offered allow option: the first `AllowAlways` when present, otherwise the first other allow-kind option (e.g. `AllowOnce` — notably the offer shape mock-agent itself has historically used) (user decision, generalizing beyond result sessions). This replaces the deny-all `-32601` dispatch for permission requests only; elicitation/fs/terminal stay unsupported-error. If an agent offers no allow-kind option at all (only reject options, or none), respond with the unsupported-method error (cannot select an allow that doesn't exist). Documented consequence: `AllowAlways` may persist allow rules in the agent's own settings beyond the run — usually desirable for headless/CI, stated plainly in the README.
 
 ### D6: Slot semantics and turn wiring
 
@@ -71,7 +71,7 @@ mock-agent honors `session/new` `mcpServers` by spawning configured stdio server
 
 ## Migration Plan
 
-No data or config migration. Ship order within the change: UDS + slot + outcome plumbing first (text-visible only), then bridge + injection, then rmcp mock-client flags, then example + README. Each step keeps the suite green; the permission posture change lands with its own spec delta and README rewrite. Rollback is per-decision: each of D1–D7 is separable, D5 being the only one altering existing-session behavior.
+No data or config migration. Ship order within the change: UDS + slot + outcome plumbing first (text-visible only), then bridge + injection, then rmcp mock-client flags, then type definitions + example + README. Each step keeps the suite green; the permission posture change lands with its own spec delta and README rewrite. Rollback is per-decision: each of D1–D7 is separable, D5 being the only one altering existing-session behavior.
 
 ## Open Questions
 
