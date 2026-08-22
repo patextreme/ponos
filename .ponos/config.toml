@@ -1,3 +1,7 @@
 [agents.pi]
 command = "pi-acp"
 args = ["--yolo"]
+
+[agents.opencode]
+command = "opencode"
+args = ["acp"]
