@@ -1,5 +1,4 @@
 {
-  inputs,
   ...
 }: {
   perSystem = {
@@ -8,11 +7,10 @@
     ...
   }: {
     devShells.default = pkgs.mkShell {
-      packages = [
+      packages = with pkgs; [
         config.rustToolchain
-        # Same analyzer the ponos-analyze check pins, for local editors
-        # and `luau-lsp analyze` runs (see types/ponos.d.luau).
-        pkgs.luau-lsp
+        luau-lsp
+        luau
       ];
 
       RUST_SRC_PATH = "${config.rustToolchain}/lib/rustlib/src/rust/library";
