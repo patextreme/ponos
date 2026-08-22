@@ -283,3 +283,355 @@ async fn two_sessions_are_independent_processes() {
     a.join().await;
     b.join().await;
 }
+
+// ---------------------------------------------------------------------------
+// Session config options (capability, capture, updates, setConfig)
+// ---------------------------------------------------------------------------
+
+/// Advertised option set used across config tests: a select `model`
+/// option (category `model`, choices opus/haiku, current `opus`) and a
+/// boolean `fast` option (current false, no category).
+const MODEL_OPTIONS_JSON: &str = r#"[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"opus","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]},{"id":"fast","name":"Fast mode","type":"boolean","currentValue":false}]"#;
+
+#[tokio::test]
+async fn handshake_advertises_config_option_capability() {
+    // The mock agent asserts on every `initialize` that the client
+    // advertises `session.configOptions` (with its `boolean`
+    // sub-capability); a missing bit kills the handshake. Driving a full
+    // turn proves the capability bit reached the wire.
+    let session = start_session(&mock_agent_spec(), opts("mock/cap"), quiet_renderer())
+        .await
+        .expect("handshake with capability");
+    let outcome = session
+        .prompt("hi".into(), None)
+        .await
+        .expect("turn completes");
+    assert_eq!(outcome.text, "hi");
+    session.close();
+    session.join().await;
+}
+
+#[tokio::test]
+async fn config_options_captured_from_session_new() {
+    // session-config-options spec "Options captured at session start":
+    // MOCK_CONFIG_OPTIONS rides the session/new response into the
+    // session's option state.
+    let mut spec = mock_agent_spec();
+    spec.env
+        .insert("MOCK_CONFIG_OPTIONS".into(), MODEL_OPTIONS_JSON.into());
+    let session = start_session(&spec, opts("mock/cfg-capture"), quiet_renderer())
+        .await
+        .expect("session starts");
+    let options = session.config_options();
+    assert_eq!(options.len(), 2, "{options:?}");
+    assert_eq!(options[0].id.0.as_ref(), "model");
+    assert_eq!(
+        options[0].category,
+        Some(agent_client_protocol::schema::v1::SessionConfigOptionCategory::Model)
+    );
+    session.close();
+    session.join().await;
+}
+
+#[tokio::test]
+async fn config_option_update_replaces_state() {
+    // session-config-options spec "Agent-pushed update is folded":
+    // MOCK_CONFIG_UPDATE pushes a `config_option_update` during the first
+    // prompt's turn; the state snapshot reflects it once the turn ends,
+    // and the mock's own state changed too (MOCK_CONFIG_ECHO on a
+    // follow-up prompt replies with the new value).
+    let mut spec = mock_agent_spec();
+    spec.env
+        .insert("MOCK_CONFIG_OPTIONS".into(), MODEL_OPTIONS_JSON.into());
+    spec.env.insert(
+        "MOCK_CONFIG_UPDATE".into(),
+        r#"[{"id":"model","name":"Model","type":"select","currentValue":"haiku","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]}]"#.into(),
+    );
+    spec.env.insert("MOCK_CONFIG_ECHO".into(), "model".into());
+    let session = start_session(&spec, opts("mock/cfg-update"), quiet_renderer())
+        .await
+        .expect("session starts");
+    let outcome = session
+        .prompt("first".into(), None)
+        .await
+        .expect("turn completes");
+    assert_eq!(outcome.text, "opus", "echo should still see the old value");
+    // The push follows prompt 1 on the wire; by the time a later turn
+    // completes it is definitely folded (and the mock's own state carries
+    // it, so the follow-up prompt echoes the new value).
+    let outcome = session
+        .prompt("second".into(), None)
+        .await
+        .expect("follow-up turn completes");
+    assert_eq!(outcome.text, "haiku", "mock state should carry the update");
+    let options = session.config_options();
+    assert_eq!(options.len(), 1, "{options:?}");
+    assert!(
+        matches!(
+            &options[0].kind,
+            agent_client_protocol::schema::v1::SessionConfigKind::Select(s)
+                if s.current_value.0.as_ref() == "haiku"
+        ),
+        "{options:?}"
+    );
+    session.close();
+    session.join().await;
+}
+
+#[tokio::test]
+async fn set_config_roundtrip_updates_state() {
+    // Driver-level set: the response's full option set replaces the
+    // session state; errors carry config id + agent message.
+    let mut spec = mock_agent_spec();
+    spec.env
+        .insert("MOCK_CONFIG_OPTIONS".into(), MODEL_OPTIONS_JSON.into());
+    let session = start_session(&spec, opts("mock/cfg-set"), quiet_renderer())
+        .await
+        .expect("session starts");
+
+    session
+        .set_config(
+            "model".into(),
+            agent_client_protocol::schema::v1::SessionConfigOptionValue::value_id("haiku"),
+        )
+        .await
+        .expect("set succeeds");
+    let options = session.config_options();
+    assert!(
+        matches!(
+            &options[0].kind,
+            agent_client_protocol::schema::v1::SessionConfigKind::Select(s)
+                if s.current_value.0.as_ref() == "haiku"
+        ),
+        "{options:?}"
+    );
+
+    let err = session
+        .set_config(
+            "model".into(),
+            agent_client_protocol::schema::v1::SessionConfigOptionValue::value_id("haiku"),
+        )
+        .await; // no MOCK_CONFIG_REJECT: still succeeds (re-set same value)
+    assert!(err.is_ok());
+
+    session.close();
+    session.join().await;
+}
+
+/// Run one inline Luau script (against no registry: agents are inline
+/// specs pointing at the mock binary) and report the run outcome.
+fn run_script(name: &str, body: &str) -> ponos::script::RunOutcome {
+    use ponos::config::Registry;
+    use ponos::script::{self, RunConfig};
+
+    let dir = std::env::temp_dir().join(format!("ponos-acp-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("main.luau");
+    std::fs::write(&script, body).unwrap();
+    let cfg = RunConfig {
+        script_path: script,
+        invocation_dir: dir,
+        registry: Registry::from_parts(None, None).unwrap(),
+        renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(tokio::task::LocalSet::new().run_until(script::run(cfg)))
+}
+
+#[test]
+fn config_options_lua_read_shape() {
+    // Session API: `configOptions()` reports select and boolean entries
+    // with their advertised values, choices, and optional category.
+    let out = run_script(
+        "cfg-read",
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{ MOCK_CONFIG_OPTIONS = '{json}' }} }})
+local s = agent:session()
+local options = s:configOptions()
+assert(#options == 2, "count: " .. tostring(#options))
+local model = options[1]
+assert(model.id == "model", model.id)
+assert(model.name == "Model", model.name)
+assert(model.type == "select", model.type)
+assert(model.currentValue == "opus", tostring(model.currentValue))
+assert(model.category == "model", tostring(model.category))
+assert(model.options ~= nil and #model.options == 2, "choices")
+assert(model.options[1].id == "opus" and model.options[1].name == "Opus", "choice 1")
+assert(model.options[2].id == "haiku" and model.options[2].name == "Haiku", "choice 2")
+assert(model.options[1].description == nil, "absent description must be nil")
+local fast = options[2]
+assert(fast.id == "fast", fast.id)
+assert(fast.type == "boolean", fast.type)
+assert(fast.currentValue == false, tostring(fast.currentValue))
+assert(fast.options == nil, "boolean options must be nil")
+assert(fast.category == nil, "absent category must be nil")
+s:close()
+"#,
+            mock = env!("CARGO_BIN_EXE_mock-agent"),
+            json = MODEL_OPTIONS_JSON
+        ),
+    );
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn set_config_effective_value_via_echo() {
+    // Session API: a successful `setConfig` returns nil, updates the live
+    // state, and the follow-up prompt provably runs under the new value
+    // (MOCK_CONFIG_ECHO replies with the mock's current option value).
+    let out = run_script(
+        "cfg-set-echo",
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{
+    MOCK_CONFIG_OPTIONS = '{json}',
+    MOCK_CONFIG_ECHO = "model",
+}} }})
+local s = agent:session()
+local ret = s:setConfig("model", "haiku")
+assert(ret == nil, "setConfig must return nil")
+local options = s:configOptions()
+assert(options[1].currentValue == "haiku", tostring(options[1].currentValue))
+local r = s:prompt("go")
+assert(r.text == "haiku", "echo: " .. r.text)
+-- boolean options accept boolean values
+s:setConfig("fast", true)
+local after = s:configOptions()
+assert(after[2].currentValue == true, tostring(after[2].currentValue))
+s:close()
+"#,
+            mock = env!("CARGO_BIN_EXE_mock-agent"),
+            json = MODEL_OPTIONS_JSON
+        ),
+    );
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn set_config_agent_reject_and_unsupported_method() {
+    // Agent rejection (generic error) and unsupported method (-32601)
+    // both raise catchable Lua errors naming the config id and carrying
+    // the agent's message.
+    for reject in ["model", "model=notfound"] {
+        let out = run_script(
+            &format!("cfg-reject-{}", reject.replace('=', "-")),
+            &format!(
+                r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{
+    MOCK_CONFIG_OPTIONS = '{json}',
+    MOCK_CONFIG_REJECT = "{reject}",
+}} }})
+local s = agent:session()
+local ok, err = pcall(function() return s:setConfig("model", "haiku") end)
+assert(not ok, "setConfig must fail when the agent rejects")
+local msg = tostring(err)
+assert(msg:find("model", 1, true), "must name the config id: " .. msg)
+assert(msg:find("rejects config id model", 1, true) or msg:find("Method not found", 1, true),
+    "must carry the agent message: " .. msg)
+-- the state is untouched by a rejected set
+local options = s:configOptions()
+assert(options[1].currentValue == "opus", tostring(options[1].currentValue))
+s:close()
+"#,
+                mock = env!("CARGO_BIN_EXE_mock-agent"),
+                json = MODEL_OPTIONS_JSON,
+                reject = reject
+            ),
+        );
+        assert_eq!(out.code, 0, "reject={reject}, error: {:?}", out.error);
+    }
+}
+
+#[test]
+fn set_config_mid_turn_serialization() {
+    // `setConfig` issued while a turn is in flight waits for it: the
+    // request goes out only after the turn completes (config changes
+    // apply strictly between turns). MOCK_DELAY_MS stretches the turn to
+    // ~150 ms; an unserialized setConfig would return in ~5 ms.
+    let out = run_script(
+        "cfg-midturn",
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{
+    MOCK_CONFIG_OPTIONS = '{json}',
+    MOCK_CONFIG_ECHO = "model",
+    MOCK_DELAY_MS = "150",
+}} }})
+local s = agent:session()
+local first = ponos.spawn(function() return s:prompt("first").text end)
+ponos.sleep(30)
+local t0 = os.clock()
+s:setConfig("model", "haiku")
+local took = os.clock() - t0
+assert(took >= 0.10, "setConfig did not wait for the in-flight turn: " .. tostring(took))
+local firstText = first:await()
+assert(firstText == "opus", "first turn ran under the old value: " .. firstText)
+local r = s:prompt("second")
+assert(r.text == "haiku", "second turn ran under the new value: " .. r.text)
+s:close()
+"#,
+            mock = env!("CARGO_BIN_EXE_mock-agent"),
+            json = MODEL_OPTIONS_JSON
+        ),
+    );
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn set_config_wrong_type_errors_before_send() {
+    // Non-string, non-boolean values raise a Lua error before any wire
+    // traffic; the session's option state is unchanged.
+    let out = run_script(
+        "cfg-wrongtype",
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{ MOCK_CONFIG_OPTIONS = '{json}' }} }})
+local s = agent:session()
+local ok, err = pcall(function() return s:setConfig("model", 42) end)
+assert(not ok, "number values must be rejected")
+local msg = tostring(err)
+assert(msg:find("setConfig value", 1, true), msg)
+assert(msg:find("integer", 1, true) or msg:find("number", 1, true), msg)
+local ok2, err2 = pcall(function() return s:setConfig("model", nil) end)
+assert(not ok2, "nil values must be rejected")
+local options = s:configOptions()
+assert(options[1].currentValue == "opus", tostring(options[1].currentValue))
+s:close()
+"#,
+            mock = env!("CARGO_BIN_EXE_mock-agent"),
+            json = MODEL_OPTIONS_JSON
+        ),
+    );
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn config_options_empty_when_agent_offers_none() {
+    // Agents without config options yield an empty table, and `setConfig`
+    // on them still round-trips through the agent (the mock answers with
+    // its empty state).
+    let out = run_script(
+        "cfg-empty",
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{ MOCK_CONFIG_ECHO = "model" }} }})
+local s = agent:session()
+local options = s:configOptions()
+assert(#options == 0, "expected empty options, got " .. tostring(#options))
+assert(next(options) == nil, "options must be an empty table")
+s:setConfig("model", "haiku")
+assert(#s:configOptions() == 0, "still empty after a set")
+local r = s:prompt("go")
+assert(r.text == "unknown-config:model", "echo of an unset option: " .. r.text)
+s:close()
+"#,
+            mock = env!("CARGO_BIN_EXE_mock-agent"),
+        ),
+    );
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}

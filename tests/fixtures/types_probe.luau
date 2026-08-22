@@ -71,6 +71,40 @@ assert(rr.result.verdict == "approve", "result.verdict: " .. tostring(rr.result.
 assert(rr.stopReason == "end_turn", "result stopReason: " .. rr.stopReason)
 sr:close()
 
+-- Per-session config (Session.configOptions / Session.setConfig): the
+-- mock advertises a select `model` option plus a boolean `fast` option and
+-- echoes the current model in each reply (MOCK_CONFIG_ECHO).
+local cfg_agent = ponos.agent("demo-config")
+local sc = cfg_agent:session()
+local cfg = sc:configOptions()
+assert(#cfg == 2, "configOptions count: " .. tostring(#cfg))
+local model = cfg[1]
+assert(model.id == "model", "model id: " .. model.id)
+assert(model.name == "Model", "model name: " .. model.name)
+assert(model.type == "select", "model type: " .. model.type)
+assert(model.currentValue == "opus", "model value: " .. tostring(model.currentValue))
+assert(model.category == "model", "model category: " .. tostring(model.category))
+local choices = model.options
+assert(choices ~= nil and #choices == 2, "model choices")
+assert(choices[1].id == "opus" and choices[1].name == "Opus", "choice 1")
+assert(choices[2].id == "haiku" and choices[2].name == "Haiku", "choice 2")
+local fast = cfg[2]
+assert(fast.id == "fast", "fast id: " .. fast.id)
+assert(fast.type == "boolean", "fast type: " .. fast.type)
+assert(fast.currentValue == false, "fast value: " .. tostring(fast.currentValue))
+assert(fast.options == nil, "boolean options must be nil")
+assert(fast.category == nil, "absent category must be nil")
+
+sc:setConfig("model", "haiku")
+local cfg_after = sc:configOptions()
+assert(cfg_after[1].currentValue == "haiku", "model after: " .. tostring(cfg_after[1].currentValue))
+local rc = sc:prompt("go")
+assert(rc.text == "haiku", "config echo: " .. rc.text)
+sc:setConfig("fast", true)
+local cfg_fast = sc:configOptions()
+assert(cfg_fast[2].currentValue == true, "fast after: " .. tostring(cfg_fast[2].currentValue))
+sc:close()
+
 -- session:cancel() on a hanging turn → stopReason == "cancelled".
 local hang = ponos.agent("demo-hang")
 local sh = hang:session()

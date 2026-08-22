@@ -3,15 +3,17 @@
 //!
 //! Each ponos session owns one agent subprocess. A driver task runs the
 //! JSON-RPC connection: it performs the handshake, creates the ACP session,
-//! then serves a command channel (`prompt` / `cancel` / `close`). Streaming
-//! `session/update` notifications are folded into the in-flight turn's
-//! accumulator and forwarded to the renderer. ponos declares no client
-//! capabilities; agent-to-client requests are answered automatically so
-//! turns never hang: fs/terminal/elicitation (and anything else unknown)
-//! with a JSON-RPC "method not found" (-32601) error by the dispatch chain,
-//! and `session/request_permission` with the headless allow-all selection
-//! (prefer `AllowAlways`, else the first other allow option) registered
-//! below it.
+//! then serves a command channel (`prompt` / `set_config` / `cancel` /
+//! `close`). Streaming `session/update` notifications are folded into the
+//! in-flight turn's accumulator and forwarded to the renderer. ponos
+//! declares exactly one client capability — the non-interactive
+//! `session.configOptions` — so capability-gating agents may offer
+//! per-session config options; agent-to-client requests are still answered
+//! automatically so turns never hang: fs/terminal/elicitation (and anything
+//! else unknown) with a JSON-RPC "method not found" (-32601) error by the
+//! dispatch chain, and `session/request_permission` with the headless
+//! allow-all selection (prefer `AllowAlways`, else the first other allow
+//! option) registered below it.
 //!
 //! Sessions with a typed result contract (`agent:session({ result = … })`)
 //! additionally bind a per-session Unix-domain result channel and offer
@@ -25,10 +27,14 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, ContentChunk, EnvVariable, InitializeRequest, McpServer,
-    McpServerStdio, NewSessionRequest, PermissionOption, PermissionOptionKind, PromptRequest,
-    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason, TextContent, Usage,
+    BooleanConfigOptionCapabilities, CancelNotification, ClientCapabilities,
+    ClientSessionCapabilities, ContentBlock, ContentChunk, EnvVariable, InitializeRequest,
+    McpServer, McpServerStdio, NewSessionRequest, PermissionOption, PermissionOptionKind,
+    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionValue, SessionConfigOptionsCapabilities,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, StopReason, TextContent,
+    Usage,
 };
 use agent_client_protocol::{AcpAgent, ByteStreams, Client, ConnectionTo};
 use tokio::sync::{mpsc, oneshot};
@@ -149,6 +155,11 @@ enum SessionCmd {
         timeout: Option<Duration>,
         resp: oneshot::Sender<Result<TurnOutcome, TurnError>>,
     },
+    SetConfig {
+        id: String,
+        value: SessionConfigOptionValue,
+        resp: oneshot::Sender<Result<(), String>>,
+    },
     Cancel,
     Close,
 }
@@ -213,6 +224,10 @@ pub struct SessionHandle {
     /// Serializes prompt turns on this session (cancellation does not take
     /// the lock).
     turn_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Live per-session config-option state (captured at `session/new`,
+    /// then folded from `config_option_update` notifications and
+    /// `set_config_option` responses).
+    config_options: Arc<Mutex<Vec<SessionConfigOption>>>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -250,6 +265,35 @@ impl SessionHandle {
     /// Send `session/cancel` for the in-flight turn (if any).
     pub fn cancel(&self) {
         let _ = self.cmd_tx.send(SessionCmd::Cancel);
+    }
+
+    /// Snapshot the session's live config-option state.
+    pub fn config_options(&self) -> Vec<SessionConfigOption> {
+        self.config_options.lock().unwrap().clone()
+    }
+
+    /// Send one `session/set_config_option`. Serialized with prompt turns
+    /// on this session via the turn lock, so config changes apply strictly
+    /// between turns. Fails with a string carrying the config id and the
+    /// agent's error message.
+    pub async fn set_config(
+        &self,
+        id: String,
+        value: SessionConfigOptionValue,
+    ) -> Result<(), String> {
+        let _turn = self.turn_lock.lock().await;
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(SessionCmd::SetConfig {
+                id,
+                value,
+                resp: tx,
+            })
+            .map_err(|_| "session driver exited".to_string())?;
+        match rx.await {
+            Ok(result) => result,
+            Err(_) => Err("session driver exited".to_string()),
+        }
     }
 
     /// Ask the driver to close the session; does not wait.
@@ -321,6 +365,9 @@ pub async fn start_session(
     let (done_tx, done_rx) = tokio::sync::watch::channel(false);
 
     let fold = Arc::new(Mutex::new(TurnFold::default()));
+    // Live config-option state (session/new → updates → sets), shared
+    // with the driver connection and snapshotted by the handle.
+    let config_options = Arc::new(Mutex::new(Vec::<SessionConfigOption>::new()));
     let label = opts.label.clone();
 
     // Typed result contract: bind the per-session channel and offer the
@@ -372,6 +419,7 @@ pub async fn start_session(
     let teardown_label = label.clone();
     let driver_fold = fold.clone();
     let driver_renderer = renderer.clone();
+    let driver_config = config_options.clone();
 
     let driver = tokio::spawn(async move {
         let child_guard = child;
@@ -380,6 +428,7 @@ pub async fn start_session(
         let notif_fold = driver_fold.clone();
         let notif_renderer = driver_renderer.clone();
         let notif_label = driver_label.clone();
+        let notif_config = driver_config.clone();
 
         let builder = Client
             .builder()
@@ -439,7 +488,13 @@ pub async fn start_session(
             )
             .on_receive_notification(
                 async move |notif: SessionNotification, _cx| {
-                    fold_update(&notif_fold, &notif_renderer, &notif_label, notif.update);
+                    fold_update(
+                        &notif_config,
+                        &notif_fold,
+                        &notif_renderer,
+                        &notif_label,
+                        notif.update,
+                    );
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),
@@ -451,7 +506,20 @@ pub async fn start_session(
         let result: Result<(), agent_client_protocol::Error> = builder
             .connect_with(ByteStreams::new(stdin, stdout), move |conn| async move {
                 // --- initialize handshake ---
-                match request(&conn, InitializeRequest::new(ProtocolVersion::V1)).await {
+                // The one client capability ponos declares:
+                // `session.configOptions` (with its `boolean` sub-capability,
+                // so conforming agents may offer boolean options and accept
+                // boolean set values). It commits ponos to nothing
+                // interactive; agent-to-client requests are still answered
+                // by the deny-all dispatch below.
+                let mut init = InitializeRequest::new(ProtocolVersion::V1);
+                init.client_capabilities = ClientCapabilities::new().session(Some(
+                    ClientSessionCapabilities::new().config_options(
+                        SessionConfigOptionsCapabilities::new()
+                            .boolean(BooleanConfigOptionCapabilities::new()),
+                    ),
+                ));
+                match request(&conn, init).await {
                     Ok(_) => {}
                     Err(e) => {
                         let _ = ready_tx.send(Err(SessionError::Handshake(e.to_string())));
@@ -470,6 +538,11 @@ pub async fn start_session(
                     }
                 };
                 let session_id = new_session.session_id;
+                // Capture the advertised options as the session's initial
+                // option state.
+                if let Some(options) = new_session.config_options {
+                    *driver_config.lock().unwrap() = options;
+                }
                 driver_renderer.lifecycle(&format!("{driver_label}: session ready"));
 
                 let _ = ready_tx.send(Ok(()));
@@ -509,6 +582,33 @@ pub async fn start_session(
                             // channel and raises `TurnError::Closed`.
                             if let Err(e) = spawned {
                                 tracing::warn!(%e, "failed to queue prompt task");
+                            }
+                        }
+                        SessionCmd::SetConfig { id, value, resp } => {
+                            let conn2 = conn.clone();
+                            let config = driver_config.clone();
+                            let renderer = driver_renderer.clone();
+                            let session_id = session_id.clone();
+                            let label = driver_label.clone();
+                            let spawned = conn.spawn(async move {
+                                let result = run_set_config(
+                                    &conn2,
+                                    &config,
+                                    &renderer,
+                                    &label,
+                                    &session_id,
+                                    id,
+                                    value,
+                                )
+                                .await;
+                                let _ = resp.send(result);
+                                Ok(())
+                            });
+                            // If queueing failed the closure (and `resp` with
+                            // it) was dropped: the awaiting setConfig call
+                            // observes a closed channel and errors.
+                            if let Err(e) = spawned {
+                                tracing::warn!(%e, "failed to queue set-config task");
                             }
                         }
                         SessionCmd::Cancel => {
@@ -556,6 +656,7 @@ pub async fn start_session(
             cmd_tx,
             done_rx,
             turn_lock: Arc::new(tokio::sync::Mutex::new(())),
+            config_options,
         }),
         Ok(Err(e)) => {
             let _ = driver.await;
@@ -678,6 +779,7 @@ async fn run_turn(
 
 /// Fold one streaming update into the turn accumulator + renderer.
 fn fold_update(
+    config: &Arc<Mutex<Vec<SessionConfigOption>>>,
     fold: &Arc<Mutex<TurnFold>>,
     renderer: &Arc<Renderer>,
     label: &str,
@@ -732,9 +834,111 @@ fn fold_update(
                 },
             );
         }
+        SessionUpdate::ConfigOptionUpdate(update) => {
+            // The payload carries the full option set: replace the state
+            // wholesale and note what changed (no reply exists — it's a
+            // notification).
+            let changed = apply_config_options(config, update.config_options);
+            if !changed.is_empty() {
+                renderer.lifecycle(&format!(
+                    "{label}: config changed: {}",
+                    format_changed(&changed)
+                ));
+            }
+        }
         // User message echo, thoughts, and unstable updates are not rendered in v1.
         _ => {}
     }
+}
+
+/// Send one `session/set_config_option` and fold the response into the
+/// session's option state. The caller holds the session's turn lock, so
+/// this runs strictly between turns.
+async fn run_set_config(
+    conn: &ConnectionTo<agent_client_protocol::Agent>,
+    config: &Arc<Mutex<Vec<SessionConfigOption>>>,
+    renderer: &Arc<Renderer>,
+    label: &str,
+    session_id: &agent_client_protocol::schema::v1::SessionId,
+    id: String,
+    value: SessionConfigOptionValue,
+) -> Result<(), String> {
+    let req = SetSessionConfigOptionRequest::new(
+        session_id.clone(),
+        SessionConfigId::new(id.clone()),
+        value.clone(),
+    );
+    match request(conn, req).await {
+        Ok(resp) => {
+            let changed = apply_config_options(config, resp.config_options);
+            // One lifecycle line per successful set, naming each changed
+            // option id and its new value (falls back to the requested
+            // pair when the agent reports no diff).
+            let summary = if changed.is_empty() {
+                format!("{id}={}", option_value_display(&value))
+            } else {
+                format_changed(&changed)
+            };
+            renderer.lifecycle(&format!("{label}: config changed: {summary}"));
+            Ok(())
+        }
+        Err(e) => Err(format!("setConfig(\"{id}\") failed: {e}")),
+    }
+}
+
+/// Replace the session's option state wholesale and return the
+/// `(id, new value)` pairs that differ from the previous state. An update
+/// arriving with no prior option state reports every advertised option
+/// as changed.
+fn apply_config_options(
+    config: &Arc<Mutex<Vec<SessionConfigOption>>>,
+    new_options: Vec<SessionConfigOption>,
+) -> Vec<(String, String)> {
+    let mut options = config.lock().unwrap();
+    let previous: std::collections::HashMap<String, String> = options
+        .iter()
+        .filter_map(|o| Some((o.id.0.to_string(), current_value_string(o)?)))
+        .collect();
+    let changed = new_options
+        .iter()
+        .filter_map(|o| {
+            let id = o.id.0.to_string();
+            let value = current_value_string(o)?;
+            (previous.get(&id).map(String::as_str) != Some(value.as_str())).then_some((id, value))
+        })
+        .collect();
+    *options = new_options;
+    changed
+}
+
+/// Display string for an option's current value (select value id or
+/// boolean); `None` for unknown option kinds.
+fn current_value_string(opt: &SessionConfigOption) -> Option<String> {
+    match &opt.kind {
+        SessionConfigKind::Select(s) => Some(s.current_value.0.to_string()),
+        SessionConfigKind::Boolean(b) => Some(b.current_value.to_string()),
+        _ => None,
+    }
+}
+
+/// Display string for a `set_config_option` value.
+fn option_value_display(value: &SessionConfigOptionValue) -> String {
+    if let Some(id) = value.as_value_id() {
+        id.0.to_string()
+    } else if let Some(b) = value.as_bool() {
+        b.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// `id=value, id=value` summary of a changed-options list.
+fn format_changed(changed: &[(String, String)]) -> String {
+    changed
+        .iter()
+        .map(|(id, value)| format!("{id}={value}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn status_string(status: &agent_client_protocol::schema::v1::ToolCallStatus) -> String {
@@ -827,6 +1031,60 @@ mod tests {
         ];
         assert_eq!(select_allow_option(&options), None);
         assert_eq!(select_allow_option(&[]), None);
+    }
+
+    #[test]
+    fn apply_config_options_diff() {
+        use agent_client_protocol::schema::v1::{
+            SessionConfigSelectOption, SessionConfigSelectOptions,
+        };
+
+        let config = Arc::new(Mutex::new(Vec::<SessionConfigOption>::new()));
+        let choices = vec![
+            SessionConfigSelectOption::new("opus", "Opus"),
+            SessionConfigSelectOption::new("haiku", "Haiku"),
+        ];
+        let options = vec![
+            SessionConfigOption::select(
+                "model",
+                "Model",
+                "opus",
+                SessionConfigSelectOptions::Ungrouped(choices.clone()),
+            ),
+            SessionConfigOption::boolean("fast", "Fast mode", false),
+        ];
+
+        // No prior state: every advertised option counts as changed.
+        let changed = apply_config_options(&config, options.clone());
+        assert_eq!(
+            changed,
+            vec![
+                ("model".to_string(), "opus".to_string()),
+                ("fast".to_string(), "false".to_string()),
+            ]
+        );
+
+        // Identical state: nothing changed.
+        let changed = apply_config_options(&config, options.clone());
+        assert!(changed.is_empty(), "{changed:?}");
+
+        // New value (and a previously unseen id): both reported.
+        let mut updated = options.clone();
+        updated[0] = SessionConfigOption::select(
+            "model",
+            "Model",
+            "haiku",
+            SessionConfigSelectOptions::Ungrouped(choices),
+        );
+        updated.push(SessionConfigOption::boolean("effort", "Effort", true));
+        let changed = apply_config_options(&config, updated);
+        assert_eq!(
+            changed,
+            vec![
+                ("model".to_string(), "haiku".to_string()),
+                ("effort".to_string(), "true".to_string()),
+            ]
+        );
     }
 
     #[test]

@@ -23,7 +23,9 @@ fn type_definitions_probe() {
     std::fs::create_dir_all(dir.join(".ponos")).unwrap();
 
     // `demo`: normal turns with known usage counts. `demo-hang`: prompts
-    // never complete on their own (cancel path).
+    // never complete on their own (cancel path). `demo-config`: advertises
+    // a select `model` option and a boolean `fast` option, and echoes the
+    // current model value in each reply (config-options surface).
     let config = format!(
         r#"[agents.demo]
 command = "{mock}"
@@ -38,8 +40,17 @@ args = []
 
 [agents.demo-hang.env]
 MOCK_HANG = "1"
+
+[agents.demo-config]
+command = "{mock}"
+args = []
+
+[agents.demo-config.env]
+MOCK_CONFIG_OPTIONS = '{config_options}'
+MOCK_CONFIG_ECHO = "model"
 "#,
-        mock = mock_bin()
+        mock = mock_bin(),
+        config_options = r#"[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"opus","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]},{"id":"fast","name":"Fast mode","type":"boolean","currentValue":false}]"#
     );
     std::fs::write(dir.join(".ponos").join("config.toml"), config).unwrap();
 

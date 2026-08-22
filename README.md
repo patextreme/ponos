@@ -124,6 +124,8 @@ never hang.
 | `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`__tostring` → text) |
 | `session:cancel()` | Cancels the in-flight turn (returns `stopReason = "cancelled"`) |
 | `session:close()` | Ends the session and reaps the agent process |
+| `session:configOptions()` | Live per-session config options (empty table when the agent offers none) |
+| `session:setConfig(id, value)` | Set a config option between turns — string (select choice id) or boolean value; raises on agent rejection |
 | `ponos.spawn(fn)` → `task:await()` | Concurrent task; errors re-raise at the await site |
 | `ponos.join({task, …})` | Wait for tasks → per-task `{ok, value}` / `{ok=false, error}` entries |
 | `ponos.map(items, fn, {concurrency=})` | Fan-out (default unlimited) → per-item outcome entries |
@@ -204,6 +206,52 @@ tree. (One deviation: a restricted `coroutine` table containing only `yield`
 remains visible because the embedded async runtime needs it; the scheduling
 primitives are absent.)
 
+### Per-session config (models and more)
+
+Agents increasingly expose per-session configuration — above all the model
+— through ACP session config options. ponos advertises the
+`session.configOptions` client capability (its only declared capability;
+nothing interactive), captures the options each `session/new` response
+advertises, and keeps them live as the agent pushes changes:
+
+```lua
+--!strict
+local claude = ponos.agent("claude")
+local opus = claude:session({ id = "reviewer" })
+local haiku = claude:session({ id = "summarizer" })
+
+for _, option in ipairs(opus:configOptions()) do
+    ponos.log(("%s = %s"):format(option.id, tostring(option.currentValue)))
+end
+
+opus:setConfig("model", "claude-opus-4-5")
+haiku:setConfig("model", "claude-haiku-4-5")
+```
+
+`configOptions()` returns the live option list: each entry has `id`,
+`name`, `type` (`"select"` or `"boolean"`), `currentValue` (the selected
+choice id, or the toggle state), an optional `category` (a UX hint — never
+rely on it), and — for select options — an `options` array of
+`{ id, name, description? }` choices.
+
+`setConfig(id, value)` accepts a string (a select choice id) or a boolean,
+and is serialized with prompt turns: a call issued while a turn is in
+flight waits for it, so config changes apply strictly between turns. On
+agent rejection — or when the agent does not support the method — it
+raises a catchable Lua error carrying the config id and the agent's
+message; on success it returns `nil` and updates the live state.
+
+**Option ids and value ids are agent-defined.** `"model"` and
+`"claude-opus-4-5"` belong to the agent you are driving (e.g.
+`@agentclientprotocol/claude-agent-acp` exposes `model`, `mode`, effort,
+and subagent personas this way) — enumerate `configOptions()` first and
+never assume a hardcoded id exists. The process-level alternative (env
+vars like `ANTHROPIC_MODEL` in the registry) cannot vary per session; the
+fan-out above — one agent, two models — is exactly what `setConfig` is
+for. The [model-fanout example](examples/model-fanout.luau) shows the
+full pattern; successful sets and agent-pushed changes each render one
+lifecycle line (`--verbose`).
+
 ## Editor setup
 
 Scripts get completion, hover, and type checking — plus sandbox violations
@@ -266,8 +314,8 @@ Known residuals of the definitions (none affect execution):
 ## Examples
 
 See [`examples/`](examples/) — sequential review, fan-out with a concurrency
-cap, a watchdog cancel, and typed results with a retry loop — and run them
-against the bundled mock agent:
+cap, per-session model fan-out, a watchdog cancel, and typed results with a
+retry loop — and run them against the bundled mock agent:
 
 ```sh
 mkdir -p .ponos
@@ -286,7 +334,8 @@ ponos run examples/sequential_review.luau
   `MOCK_HANG`, `MOCK_PERMISSION` (`once`/`always`/`reject`), `MOCK_TOOL`,
   `MOCK_PLAN`, `MOCK_USAGE`, `MOCK_STDERR`, `MOCK_DELAY_MS`, `MOCK_SUBMIT`,
   `MOCK_SUBMIT_BAD`, `MOCK_SUBMIT_ONCE`, `MOCK_NO_MCP`, `MOCK_ECHO_MCP`,
-  `MOCK_MCP_LIST`, …).
+  `MOCK_MCP_LIST`, `MOCK_CONFIG_OPTIONS`, `MOCK_CONFIG_REJECT`,
+  `MOCK_CONFIG_UPDATE`, `MOCK_CONFIG_ECHO`, …).
 - `nix flake check` runs the entire suite in the sandbox.
 - Toolchain: pinned nightly in `rust-toolchain.toml`, consumed by the oxalica
   overlay for devshell and crane builds.

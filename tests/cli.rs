@@ -244,3 +244,51 @@ fn exit_code_propagates() {
     assert_eq!(code, 1);
     assert!(stderr.contains("boom"), "{stderr}");
 }
+
+#[test]
+fn config_change_lifecycle_lines_render() {
+    // session-config-options spec "Config changes are rendered": a
+    // successful setConfig and an agent-pushed config_option_update each
+    // render one session-attributed lifecycle line naming the changed
+    // option id and its new value (--verbose).
+    let dir = std::env::temp_dir().join(format!("ponos-cli-cfg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".ponos")).unwrap();
+    // Env values carry JSON: TOML literal strings keep the quotes intact.
+    let config = format!(
+        "[agents.mock]\ncommand = \"{}\"\nargs = []\n\n[agents.mock.env]\nMOCK_CONFIG_OPTIONS = '[{}]'\nMOCK_CONFIG_UPDATE = '[{}]'\n",
+        mock_bin(),
+        r#"{"id":"model","name":"Model","type":"select","currentValue":"opus","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]}"#,
+        r#"{"id":"model","name":"Model","type":"select","currentValue":"sonnet","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"},{"value":"sonnet","name":"Sonnet"}]}"#,
+    );
+    std::fs::write(dir.join(".ponos").join("config.toml"), config).unwrap();
+    let script = dir.join("main.luau");
+    std::fs::write(
+        &script,
+        r#"
+local s = ponos.agent("mock"):session()
+s:prompt("first")             -- the agent pushes model=sonnet after this turn
+s:setConfig("model", "haiku") -- and the set reports model=haiku
+s:prompt("second")
+s:close()
+"#,
+    )
+    .unwrap();
+    let output = Command::new(ponos_bin())
+        .arg("run")
+        .arg(&script)
+        .arg("--verbose")
+        .current_dir(&dir)
+        .output()
+        .expect("run ponos");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("[ponos] mock/s1: config changed: model=sonnet"),
+        "pushed change not rendered:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("[ponos] mock/s1: config changed: model=haiku"),
+        "set change not rendered:\n{stdout}"
+    );
+}

@@ -75,6 +75,27 @@ export type PromptOptions = {
 	timeoutMs: number?,
 }
 
+-- One choice of a select config option (`options` entry).
+export type ConfigOptionChoice = {
+	id: string,
+	name: string,
+	description: string?,
+}
+
+-- One entry of `session:configOptions()`. `type` discriminates the shape:
+-- select options carry a string `currentValue` (the selected choice id)
+-- and an `options` list of choices; boolean options carry a boolean
+-- `currentValue` and no `options`. `category` is a UX hint only (nil when
+-- the agent omits it) and must not be relied on.
+export type ConfigOption = {
+	id: string,
+	name: string,
+	type: "select" | "boolean",
+	currentValue: string | boolean,
+	category: string?,
+	options: { ConfigOptionChoice }?,
+}
+
 -- Inline agent spec for `ponos.agent({ … })` (skips the registry).
 export type AgentSpec = {
 	command: string,
@@ -115,6 +136,8 @@ export type Session = {
 	cancel: (self: Session) -> (),
 	label: (self: Session) -> string,
 	close: (self: Session) -> (),
+	configOptions: (self: Session) -> { ConfigOption },
+	setConfig: (self: Session, id: string, value: string | boolean) -> (),
 }
 
 -- ---------------------------------------------------------------------------

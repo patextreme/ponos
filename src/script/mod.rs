@@ -18,6 +18,10 @@ use crate::config::{AgentSpec, Registry};
 use crate::render::Renderer;
 use crate::task::{self, TaskRegistry, TaskState};
 
+use agent_client_protocol::schema::v1::{
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
+};
+
 use require::ScriptRequirer;
 
 /// Signals `ponos.exit(code)`: unwinds the run; the code wins.
@@ -164,6 +168,46 @@ fn new_session_obj(lua: &Lua, handle: SessionHandle) -> mlua::Result<Table> {
         lua.create_function(move |_lua, _self: Table| Ok(label.clone()))?,
     )?;
 
+    let config_handle = handle.clone();
+    t.set(
+        "configOptions",
+        lua.create_function(move |lua, _self: Table| {
+            let options = config_handle.config_options();
+            config_options_table(lua, &options)
+        })?,
+    )?;
+
+    let set_config_handle = handle.clone();
+    t.set(
+        "setConfig",
+        lua.create_async_function(move |_lua, (_self, id, value): (Table, String, Value)| {
+            let handle = set_config_handle.clone();
+            async move {
+                // Value typing happens before anything is sent: a Luau
+                // string is a select value id, a boolean is a boolean
+                // option value, anything else is a script error.
+                let wire_value = match value {
+                    Value::String(s) => {
+                        let id = s.to_str()?.to_string();
+                        SessionConfigOptionValue::value_id(id)
+                    }
+                    Value::Boolean(b) => SessionConfigOptionValue::boolean(b),
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "setConfig value must be a string (select value id) or boolean, \
+                                 got {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                handle
+                    .set_config(id, wire_value)
+                    .await
+                    .map_err(mlua::Error::runtime)
+            }
+        })?,
+    )?;
+
     let close_handle = handle.clone();
     t.set(
         "close",
@@ -183,6 +227,65 @@ fn new_session_obj(lua: &Lua, handle: SessionHandle) -> mlua::Result<Table> {
     )?;
 
     Ok(t)
+}
+
+/// Convert the session's config-option state to a Luau array of option
+/// tables: `{ id, name, type ("select"|"boolean"), currentValue, category?,
+/// options? }` — select entries carry an `options` list of
+/// `{ id, name, description? }` choices (grouped selects are flattened);
+/// `category` is set only when the agent provides one (UX hint only).
+fn config_options_table(lua: &Lua, options: &[SessionConfigOption]) -> mlua::Result<Table> {
+    let t = lua.create_table()?;
+    for (i, opt) in options.iter().enumerate() {
+        let e = lua.create_table()?;
+        e.set("id", opt.id.0.to_string())?;
+        e.set("name", opt.name.clone())?;
+        match &opt.kind {
+            SessionConfigKind::Select(s) => {
+                e.set("type", "select")?;
+                e.set("currentValue", s.current_value.0.to_string())?;
+                let choices = lua.create_table()?;
+                for (n, choice) in flatten_select_options(&s.options).into_iter().enumerate() {
+                    let c = lua.create_table()?;
+                    c.set("id", choice.value.0.to_string())?;
+                    c.set("name", choice.name.clone())?;
+                    if let Some(d) = &choice.description {
+                        c.set("description", d.clone())?;
+                    }
+                    choices.raw_set(n + 1, c)?;
+                }
+                e.set("options", choices)?;
+            }
+            SessionConfigKind::Boolean(b) => {
+                e.set("type", "boolean")?;
+                e.set("currentValue", b.current_value)?;
+            }
+            _ => continue, // unknown option kinds are skipped
+        }
+        if let Some(category) = &opt.category
+            && let serde_json::Value::String(name) =
+                serde_json::to_value(category).unwrap_or(serde_json::Value::Null)
+        {
+            e.set("category", name)?;
+        }
+        t.raw_set(i + 1, e)?;
+    }
+    Ok(t)
+}
+
+/// Flatten a select option's choices (grouped selects contribute every
+/// group's options, in order).
+fn flatten_select_options(
+    options: &agent_client_protocol::schema::v1::SessionConfigSelectOptions,
+) -> Vec<&SessionConfigSelectOption> {
+    use agent_client_protocol::schema::v1::SessionConfigSelectOptions;
+    match options {
+        SessionConfigSelectOptions::Ungrouped(list) => list.iter().collect(),
+        SessionConfigSelectOptions::Grouped(groups) => {
+            groups.iter().flat_map(|g| g.options.iter()).collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<Table> {

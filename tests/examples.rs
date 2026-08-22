@@ -70,3 +70,20 @@ fn example_typed_results() {
         &[("MOCK_SUBMIT", r#"{"verdict":"approve","score":8}"#)],
     );
 }
+
+#[test]
+fn example_model_fanout() {
+    // The mock advertises a `model` select option and echoes its current
+    // value in each reply, so the two sessions provably run under the two
+    // models the example sets.
+    run_example(
+        "model-fanout.luau",
+        &[
+            (
+                "MOCK_CONFIG_OPTIONS",
+                r#"[{"id":"model","name":"Model","type":"select","currentValue":"sonnet","options":[{"value":"sonnet","name":"Sonnet"},{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]}]"#,
+            ),
+            ("MOCK_CONFIG_ECHO", "model"),
+        ],
+    );
+}

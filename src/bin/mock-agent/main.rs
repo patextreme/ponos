@@ -46,6 +46,22 @@
 //!   returns a tool error naming violations, before the `MOCK_SUBMIT`
 //!   values (in-turn retry proof); with `MOCK_SUBMIT_BAD_NEEDLE` each
 //!   violation text must also contain that substring
+//! - `MOCK_CONFIG_OPTIONS` — JSON array of `SessionConfigOption` echoed as
+//!   the `configOptions` of the `session/new` response and seeded as the
+//!   mock's live option state (asserts ponos advertises the
+//!   `session.configOptions` client capability with its `boolean`
+//!   sub-capability in `initialize`)
+//! - `MOCK_CONFIG_REJECT` — fail `session/set_config_option` for the named
+//!   config id: a generic JSON-RPC error for plain `id`, method-not-found
+//!   (-32601) for `id=notfound`; other ids succeed and mutate the mock's
+//!   in-memory option state
+//! - `MOCK_CONFIG_UPDATE` — JSON array of options: after the first
+//!   prompt completes, push a `config_option_update` (`session/update`
+//!   payload) carrying the new full option set and apply it to the
+//!   in-memory state
+//! - `MOCK_CONFIG_ECHO`   — config id: each turn's reply echoes that
+//!   option's current in-memory value (end-to-end proof that prompts run
+//!   under a changed config)
 //!
 //! The mock is also an MCP client (rmcp): stdio servers suggested in
 //! `session/new { mcpServers }` are spawned, handshaked, and torn down
@@ -59,12 +75,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AgentRequest, CancelNotification, ContentBlock, ContentChunk, ExtRequest,
-    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
-    PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptRequest,
-    PromptResponse, RequestPermissionRequest, SelectedPermissionOutcome, SessionNotification,
-    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, Usage, UsageUpdate,
+    AgentCapabilities, AgentRequest, CancelNotification, ConfigOptionUpdate, ContentBlock,
+    ContentChunk, ExtRequest, InitializeRequest, InitializeResponse, NewSessionRequest,
+    NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority,
+    PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionRequest,
+    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields, Usage, UsageUpdate,
 };
 use agent_client_protocol::{Agent, ConnectionTo, Stdio};
 use rmcp::ServiceExt;
@@ -137,6 +155,34 @@ impl McpState {
         for (_, client) in clients {
             let _ = client.lock().await.close().await;
         }
+    }
+}
+
+/// Live per-session config-option state (`MOCK_CONFIG_OPTIONS` seed,
+/// mutated by `session/set_config_option` and `MOCK_CONFIG_UPDATE`, read
+/// by `MOCK_CONFIG_ECHO`).
+#[derive(Default)]
+struct ConfigState {
+    options: std::sync::Mutex<Vec<SessionConfigOption>>,
+    /// Prompt counter (`MOCK_CONFIG_UPDATE` pushes once, on the first).
+    prompts: AtomicU64,
+}
+
+impl ConfigState {
+    /// Current display value of one option by id (select value id or
+    /// boolean); `unknown-config:<id>` when absent.
+    fn echo_value(&self, id: &str) -> String {
+        let options = self.options.lock().unwrap();
+        for opt in options.iter() {
+            if opt.id.0.as_ref() == id {
+                return match &opt.kind {
+                    SessionConfigKind::Select(s) => s.current_value.0.to_string(),
+                    SessionConfigKind::Boolean(b) => b.current_value.to_string(),
+                    _ => String::new(),
+                };
+            }
+        }
+        format!("unknown-config:{id}")
     }
 }
 
@@ -271,14 +317,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let turn = Arc::new(TurnState::default());
     let mcp = Arc::new(McpState::default());
+    let config = Arc::new(ConfigState::default());
 
     let builder = Agent
         .builder()
         .on_receive_request(
-            async |_req: InitializeRequest,
+            async |req: InitializeRequest,
                    responder: agent_client_protocol::Responder<InitializeResponse>,
                    _cx| {
-                responder.respond(InitializeResponse::new(_req.protocol_version))
+                // Capability gating: assert the client advertises
+                // `session.configOptions` (with its `boolean` sub-capability).
+                let cap = req
+                    .client_capabilities
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.config_options.as_ref());
+                assert!(
+                    cap.is_some_and(|c| c.boolean.is_some()),
+                    "client must advertise session.configOptions (+boolean) in initialize"
+                );
+                responder.respond(InitializeResponse::new(req.protocol_version))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -286,6 +344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 let turn = turn.clone();
                 let mcp = mcp.clone();
+                let config = config.clone();
                 async move |req: NewSessionRequest,
                             responder: agent_client_protocol::Responder<NewSessionResponse>,
                             _cx| {
@@ -293,7 +352,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     *turn.session_cwd.lock().unwrap() = Some(req.cwd.display().to_string());
                     start_mcp_servers(&mcp, &req.mcp_servers).await;
                     let _ = AgentCapabilities::new();
-                    responder.respond(NewSessionResponse::new(format!("mock-session-{n}")))
+                    let mut response = NewSessionResponse::new(format!("mock-session-{n}"));
+                    if let Some(raw) = std::env::var("MOCK_CONFIG_OPTIONS")
+                        .ok()
+                        .filter(|r| !r.is_empty())
+                    {
+                        let options: Vec<SessionConfigOption> = serde_json::from_str(&raw)
+                            .expect("MOCK_CONFIG_OPTIONS must be a JSON array of config options");
+                        *config.options.lock().unwrap() = options.clone();
+                        response = response.config_options(options);
+                    }
+                    responder.respond(response)
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let config = config.clone();
+                async move |req: SetSessionConfigOptionRequest,
+                            responder: agent_client_protocol::Responder<
+                    SetSessionConfigOptionResponse,
+                >,
+                            _cx| {
+                    // MOCK_CONFIG_REJECT: plain `<id>` → generic error;
+                    // `<id>=notfound` → method-not-found (-32601).
+                    if let Some(reject) = std::env::var("MOCK_CONFIG_REJECT")
+                        .ok()
+                        .filter(|r| !r.is_empty())
+                    {
+                        let (rid, notfound) = match reject.strip_suffix("=notfound") {
+                            Some(id) => (id.to_string(), true),
+                            None => (reject.clone(), false),
+                        };
+                        if req.config_id.0.as_ref() == rid {
+                            let error = if notfound {
+                                agent_client_protocol::Error::method_not_found()
+                            } else {
+                                agent_client_protocol::Error::new(
+                                    -32000,
+                                    format!("mock-agent rejects config id {rid}"),
+                                )
+                            };
+                            return responder.respond_with_error(error);
+                        }
+                    }
+                    // Other ids: mutate the in-memory state, echo the full set.
+                    let mut options = config.options.lock().unwrap();
+                    for opt in options.iter_mut() {
+                        if opt.id.0.as_ref() == req.config_id.0.as_ref() {
+                            match (&mut opt.kind, &req.value) {
+                                (
+                                    SessionConfigKind::Select(s),
+                                    SessionConfigOptionValue::ValueId { value },
+                                ) => s.current_value = value.clone(),
+                                (
+                                    SessionConfigKind::Boolean(b),
+                                    SessionConfigOptionValue::Boolean { value },
+                                ) => b.current_value = *value,
+                                _ => {}
+                            }
+                        }
+                    }
+                    responder.respond(SetSessionConfigOptionResponse::new(options.clone()))
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -307,9 +428,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             cx: ConnectionTo<agent_client_protocol::Client>| {
                     let turn = turn.clone();
                     let mcp = mcp.clone();
+                    let config = config.clone();
                     let conn = cx.clone();
                     cx.spawn(async move {
-                        if let Err(e) = run_prompt(req, responder, conn, turn, mcp).await {
+                        if let Err(e) = run_prompt(req, responder, conn, turn, mcp, config).await {
                             eprintln!("mock-agent: prompt failed: {e}");
                         }
                         Ok(())
@@ -343,6 +465,7 @@ async fn run_prompt(
     cx: ConnectionTo<agent_client_protocol::Client>,
     turn: Arc<TurnState>,
     mcp: Arc<McpState>,
+    config: Arc<ConfigState>,
 ) -> Result<(), agent_client_protocol::Error> {
     let session_id = req.session_id.clone();
     let text = prompt_text(&req);
@@ -576,6 +699,21 @@ async fn run_prompt(
         }
     }
 
+    // Agent-pushed config update: once the first prompt completes, replace
+    // the in-memory option state and notify the client with the new full
+    // set (mid-session push; the notification follows the prompt response
+    // on the wire, so it is folded before any later turn starts).
+    let config_update = std::env::var("MOCK_CONFIG_UPDATE")
+        .ok()
+        .filter(|r| !r.is_empty())
+        .and_then(|raw| {
+            serde_json::from_str::<Vec<SessionConfigOption>>(&raw)
+                .map(Some)
+                .unwrap_or_else(|e| {
+                    panic!("MOCK_CONFIG_UPDATE must be a JSON array of config options: {e}")
+                })
+        });
+
     let chunks: Vec<String> = match std::env::var("MOCK_ENV_DUMP") {
         Ok(var) => vec![std::env::var(&var).unwrap_or_default()],
         Err(_) if env_flag("MOCK_ECHO_CWD") => {
@@ -607,6 +745,10 @@ async fn run_prompt(
             }
             None => vec!["no-ponos-server".to_string()],
         },
+        Err(_) if env_flag("MOCK_CONFIG_ECHO") => {
+            let id = std::env::var("MOCK_CONFIG_ECHO").unwrap_or_default();
+            vec![config.echo_value(&id)]
+        }
         Err(_) => match std::env::var("MOCK_CHUNKS") {
             Ok(spec) => spec.split('|').map(|s| s.to_string()).collect(),
             Err(_) => vec![text],
@@ -647,7 +789,20 @@ async fn run_prompt(
             u.output,
         ));
     }
-    responder.respond(response)
+    responder.respond(response)?;
+
+    // After the first prompt only: apply and push the config update.
+    if let Some(options) = config_update {
+        let n = config.prompts.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 1 {
+            *config.options.lock().unwrap() = options.clone();
+            cx.send_notification(SessionNotification::new(
+                session_id.clone(),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 fn respond_cancelled(
