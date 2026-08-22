@@ -29,7 +29,7 @@ Scripts SHALL be able to `require` modules by relative path from the requiring f
 - **THEN** the require call raises a Lua error naming the unresolved path
 
 ### Requirement: Agent and session API
-The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), and `mcp_servers`. Two `ponos.agent` calls for the same name SHALL return independent factory objects.
+The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), `mcp_servers`, and `result` (a JSON Schema expressed as a Luau table; the option's semantics are specified by the typed-results capability). Two `ponos.agent` calls for the same name SHALL return independent factory objects.
 
 #### Scenario: Session creation
 - **WHEN** a script calls `ponos.agent("claude"):session({ id = "reviewer" })`
@@ -44,11 +44,11 @@ The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an age
 - **THEN** the factories keep independent session counters: both first sessions are labeled `claude/s1`
 
 #### Scenario: Unknown agent name
-- **WHEN** `ponos.agent("nope")` is called and `nope` exists in no registry
+- **WHEN** a script calls `ponos.agent("nope")` and `nope` exists in no registry
 - **THEN** a Lua error is raised naming the unresolved agent
 
 ### Requirement: Prompt returns a result table
-`session:prompt(text, options?)` SHALL send one prompt turn and return a table with `text` (final agent message string), `stop_reason` (`"end_turn"`, `"max_tokens"`, `"max_turn_requests"`, `"refusal"`, or `"cancelled"`), and `usage` (`input`, `cache_read`, `cache_write`, `output` token counts, zero when unreported). The result table SHALL be directly string-coercible to `text` via `__tostring`. Options SHALL accept `timeout_ms`.
+`session:prompt(text, options?)` SHALL send one prompt turn and return a table with `text` (final agent message string), `stop_reason` (`"end_turn"`, `"max_tokens"`, `"max_turn_requests"`, `"refusal"`, or `"cancelled"`), `usage` (`input`, `cache_read`, `cache_write`, `output` token counts, zero when unreported), and `result` (the turn's last accepted typed submission converted to a Luau value; `nil` when the session declared no contract or the turn had no accepted submission — the field's semantics are specified by the typed-results capability). The result table SHALL be directly string-coercible to `text` via `__tostring`. Options SHALL accept `timeout_ms`.
 
 #### Scenario: Successful turn
 - **WHEN** `local r = s:prompt("hi")` completes normally
