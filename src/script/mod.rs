@@ -100,7 +100,7 @@ fn new_session_obj(lua: &Lua, handle: SessionHandle) -> mlua::Result<Table> {
                 async move {
                     let timeout = match &opts {
                         Some(t) => t
-                            .get::<Option<u64>>("timeout_ms")?
+                            .get::<Option<u64>>("timeoutMs")?
                             .map(Duration::from_millis),
                         None => None,
                     };
@@ -112,11 +112,11 @@ fn new_session_obj(lua: &Lua, handle: SessionHandle) -> mlua::Result<Table> {
 
                     let result = lua.create_table()?;
                     result.set("text", outcome.text.clone())?;
-                    result.set("stop_reason", outcome.stop_reason)?;
+                    result.set("stopReason", outcome.stop_reason)?;
                     let usage = lua.create_table()?;
                     usage.set("input", outcome.usage.input)?;
-                    usage.set("cache_read", outcome.usage.cache_read)?;
-                    usage.set("cache_write", outcome.usage.cache_write)?;
+                    usage.set("cacheRead", outcome.usage.cache_read)?;
+                    usage.set("cacheWrite", outcome.usage.cache_write)?;
                     usage.set("output", outcome.usage.output)?;
                     result.set("usage", usage)?;
                     // The turn's last accepted typed submission as a Luau
@@ -223,11 +223,11 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                 };
 
                 let mut mcp_servers = Vec::new();
-                let raw: Option<Value> = opts.get("mcp_servers")?;
+                let raw: Option<Value> = opts.get("mcpServers")?;
                 if let Some(raw) = raw {
                     let json: serde_json::Value = lua.from_value(raw)?;
                     mcp_servers = serde_json::from_value(json).map_err(|e| {
-                        mlua::Error::runtime(format!("invalid mcp_servers entry: {e}"))
+                        mlua::Error::runtime(format!("invalid mcpServers entry: {e}"))
                     })?;
                 }
 

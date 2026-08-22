@@ -86,7 +86,7 @@ pub struct TurnOutcome {
 /// Why a prompt turn failed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TurnError {
-    /// `timeout_ms` elapsed: `session/cancel` was sent, then the error raised.
+    /// `timeoutMs` elapsed: `session/cancel` was sent, then the error raised.
     Timeout,
     /// The agent misbehaved or the protocol exchange failed.
     Agent(String),

@@ -29,7 +29,7 @@ Each `agent:session(options)` call SHALL spawn a dedicated agent subprocess for 
 - **THEN** the session's agent subprocess has exited and is reaped (no zombie remains)
 
 ### Requirement: Prompt turns drive the full update stream
-During a prompt turn ponos SHALL receive `session/update` notifications and: accumulate `agent_message_chunk` into the final message text, track tool call and plan updates for display, and render `usage_update` context-window information for display. Token counts SHALL be taken from the `session/prompt` response and returned as the result's `usage` (zero when the response reports none). The turn SHALL complete when the `session/prompt` response arrives, returning its `stopReason` as `stop_reason`.
+During a prompt turn ponos SHALL receive `session/update` notifications and: accumulate `agent_message_chunk` into the final message text, track tool call and plan updates for display, and render `usage_update` context-window information for display. Token counts SHALL be taken from the `session/prompt` response and returned as the result's `usage` (zero when the response reports none). The turn SHALL complete when the `session/prompt` response arrives, returning its `stopReason`.
 
 #### Scenario: Chunks assemble final text
 - **WHEN** an agent streams two `agent_message_chunk` updates ("Hel", "lo") and ends its turn
@@ -67,10 +67,10 @@ ponos SHALL declare no client capabilities during initialization. ponos runs hea
 - **THEN** ponos replies promptly and the turn continues toward completion
 
 ### Requirement: Cancellation maps to session/cancel
-Calling `session:cancel()` during an in-flight turn SHALL send the `session/cancel` notification to that session's agent, and `timeout_ms` expiry on `prompt` SHALL do the same before raising the timeout error.
+Calling `session:cancel()` during an in-flight turn SHALL send the `session/cancel` notification to that session's agent, and `timeoutMs` expiry on `prompt` SHALL do the same before raising the timeout error.
 
 #### Scenario: Timeout cancels remotely
-- **WHEN** a prompt exceeds `timeout_ms`
+- **WHEN** a prompt exceeds `timeoutMs`
 - **THEN** ponos sends `session/cancel` and raises the timeout error to the script
 
 ### Requirement: Processes are torn down at run end

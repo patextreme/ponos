@@ -214,7 +214,7 @@ local s = agent:session({{ result = {{
     required = {{ "verdict" }}
 }} }})
 local r = s:prompt("review this")
-assert(r.stop_reason == "end_turn", r.stop_reason)
+assert(r.stopReason == "end_turn", r.stopReason)
 assert(r.result ~= nil, "result must be submitted")
 assert(r.result.verdict == "approve", r.result.verdict)
 assert(r.result.score == 8, tostring(r.result.score))
@@ -334,7 +334,7 @@ local work = ponos.spawn(function() return s:prompt("slow") end)
 ponos.sleep(300)
 s:cancel()
 local r = work:await()
-assert(r.stop_reason == "cancelled", r.stop_reason)
+assert(r.stopReason == "cancelled", r.stopReason)
 assert(r.result == nil, "cancelled turn must discard its submission")
 s:close()
 "#,
@@ -357,7 +357,7 @@ local s = agent:session({{ result = {{ type = "object" }} }})
 local r = s:prompt("hello")
 -- The mock echoes the (augmented) prompt text.
 assert(r.text:sub(1, 5) == "hello", r.text)
-assert(r.stop_reason == "end_turn")
+assert(r.stopReason == "end_turn")
 assert(r.result == nil, "no submission must yield nil")
 s:close()
 "#,
@@ -380,7 +380,7 @@ local agent = ponos.agent({mock})
 local s = agent:session({{ result = {{ type = "object" }} }})
 local r = s:prompt("hello")
 assert(r.result == nil, tostring(r.result))
-assert(r.stop_reason == "end_turn", r.stop_reason)
+assert(r.stopReason == "end_turn", r.stopReason)
 s:close()
 "#,
             mock = mock_agent(&[("MOCK_NO_MCP", "1")])
@@ -414,7 +414,7 @@ local s = agent:session({{ result = {{
     required = {{ "verdict" }}
 }} }})
 local r = s:prompt("hello")
-assert(r.stop_reason == "end_turn", r.stop_reason)
+assert(r.stopReason == "end_turn", r.stopReason)
 assert(r.result == nil, tostring(r.result))
 s:close()
 "#,
@@ -476,7 +476,7 @@ fn result_session_injects_ponos_server_alongside_user_servers() {
 local agent = ponos.agent({mock})
 local s = agent:session({{
     result = {{ type = "object" }},
-    mcp_servers = {{ {{
+    mcpServers = {{ {{
         type = "stdio", name = "ctx", command = "/bin/true",
         args = {{ "--flag" }}, env = {{ {{ name = "K", value = "V" }} }},
     }} }},
@@ -681,7 +681,7 @@ fn permission_allow_always_is_selected() {
 local agent = ponos.agent({mock})
 local s = agent:session()
 local r = s:prompt("work")
-assert(r.stop_reason == "end_turn", r.stop_reason)
+assert(r.stopReason == "end_turn", r.stopReason)
 s:close()
 "#,
             mock = mock_agent(&[("MOCK_PERMISSION", "always")])
@@ -699,7 +699,7 @@ fn permission_allow_once_fallback_is_selected() {
 local agent = ponos.agent({mock})
 local s = agent:session()
 local r = s:prompt("work")
-assert(r.stop_reason == "end_turn", r.stop_reason)
+assert(r.stopReason == "end_turn", r.stopReason)
 s:close()
 "#,
             mock = mock_agent(&[("MOCK_PERMISSION", "once")])
@@ -717,7 +717,7 @@ fn permission_reject_only_offer_gets_method_not_found() {
 local agent = ponos.agent({mock})
 local s = agent:session()
 local r = s:prompt("work")
-assert(r.stop_reason == "end_turn", r.stop_reason)
+assert(r.stopReason == "end_turn", r.stopReason)
 s:close()
 "#,
             mock = mock_agent(&[("MOCK_PERMISSION", "reject")])

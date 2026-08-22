@@ -13,4 +13,4 @@ A definitions file SHALL declare the `ponos` global with its full public surface
 
 #### Scenario: Typed-result surface type-checks
 - **WHEN** a strict-mode script analyzed with the definitions passes `result = { type = "object" }` in `agent:session(…)` options and reads `r.result` on a prompt outcome
-- **THEN** analysis accepts both uses, while an invented option or outcome field still reports a type error
+- **THEN** analysis accepts both uses, while an invented outcome field (e.g. `r.txt`) still reports a type error naming the result table type (excess keys in option table literals are a known analyzer residual, documented in the README)

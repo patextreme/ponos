@@ -18,7 +18,7 @@ not the runtime — so fan-outs, pipelines and watchdogs read like plain code.
 local claude = ponos.agent("claude")
 local s = claude:session({ id = "reviewer" })
 local r = s:prompt("Review src/main.rs for obvious bugs; be terse.")
-ponos.log(tostring(r))       -- r.text; r.stop_reason; r.usage.input …
+ponos.log(tostring(r))       -- r.text; r.stopReason; r.usage.input …
 s:close()
 ```
 
@@ -99,7 +99,7 @@ ANTHROPIC_SMALL_FAST_MODEL = "glm-4.5-air"
 ```
 
 (Verified end-to-end: a real turn streams chunks + usage and completes with
-`stop_reason = "end_turn"`.)
+`stopReason = "end_turn"`.)
 
 ## Permissions (headless posture)
 
@@ -120,9 +120,9 @@ never hang.
 | API | Description |
 | --- | --- |
 | `ponos.agent(name_or_spec)` | Agent factory (registry name or inline `{command=, args=, env=}` spec) |
-| `agent:session({id=, cwd=, mcp_servers=, result=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `result` declares a typed-result contract (see below) |
-| `session:prompt(text, {timeout_ms=})` | One turn → `{ text, stop_reason, usage, result }` (`__tostring` → text) |
-| `session:cancel()` | Cancels the in-flight turn (returns `stop_reason = "cancelled"`) |
+| `agent:session({id=, cwd=, mcpServers=, result=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `result` declares a typed-result contract (see below) |
+| `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`__tostring` → text) |
+| `session:cancel()` | Cancels the in-flight turn (returns `stopReason = "cancelled"`) |
 | `session:close()` | Ends the session and reaps the agent process |
 | `ponos.spawn(fn)` → `task:await()` | Concurrent task; errors re-raise at the await site |
 | `ponos.join({task, …})` | Wait for tasks → per-task `{ok, value}` / `{ok=false, error}` entries |

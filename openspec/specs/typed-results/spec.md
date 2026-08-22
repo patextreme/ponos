@@ -45,7 +45,7 @@ The table returned by `session:prompt()` on a result session SHALL include a `re
 
 #### Scenario: Turn ends without submission
 - **WHEN** the agent ends its turn having never called the submit tool
-- **THEN** the outcome's `result` is `nil` and `stop_reason`/`text` are unaffected
+- **THEN** the outcome's `result` is `nil` and `stopReason`/`text` are unaffected
 
 ### Requirement: In-turn validation with retry
 Each submission SHALL be validated against the declared schema before acceptance. A submission that fails validation SHALL be reported to the agent as a failed tool result naming the violations, and the turn SHALL continue so the agent can correct the value and submit again. Only submissions that pass validation are accepted.
@@ -71,7 +71,7 @@ Accepted submissions SHALL follow last-wins semantics within a turn. The slot SH
 
 #### Scenario: Cancelled turn discards
 - **WHEN** a valid submission lands and the script then cancels the in-flight turn
-- **THEN** the outcome's `result` is `nil` and `stop_reason` is `cancelled`
+- **THEN** the outcome's `result` is `nil` and `stopReason` is `cancelled`
 
 ### Requirement: Concurrent result sessions
 Multiple result sessions SHALL operate independently: each session's schema, submissions, and outcomes are separate, and concurrent prompts on different sessions do not interfere.
@@ -81,7 +81,7 @@ Multiple result sessions SHALL operate independently: each session's schema, sub
 - **THEN** each outcome's `result` validates against its own session's schema only
 
 ### Requirement: Graceful degradation
-If the agent does not use the injected server — because it ignores the offered MCP servers, cannot access the ponos binary, or is sandboxed away from the transport — prompts SHALL still complete normally with `result` as `nil`, and ponos SHALL emit exactly one lifecycle diagnostic (a `[ponos]` line shown under `--verbose`) noting the session ran without typed results. Degradation SHALL NOT raise errors, hang turns, or change `text`/`stop_reason`.
+If the agent does not use the injected server — because it ignores the offered MCP servers, cannot access the ponos binary, or is sandboxed away from the transport — prompts SHALL still complete normally with `result` as `nil`, and ponos SHALL emit exactly one lifecycle diagnostic (a `[ponos]` line shown under `--verbose`) noting the session ran without typed results. Degradation SHALL NOT raise errors, hang turns, or change `text`/`stopReason`.
 
 #### Scenario: Agent ignores injected servers
 - **WHEN** an agent completes a turn without ever connecting to the injected server

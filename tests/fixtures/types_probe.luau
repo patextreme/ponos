@@ -6,7 +6,7 @@
 -- and analyzed by the `ponos-analyze` nix check. If a member documented in
 -- the definitions is removed or renamed in the runtime, this script fails.
 
--- ponos.agent(name) → agent:session(SessionOptions: id, cwd, mcp_servers)
+-- ponos.agent(name) → agent:session(SessionOptions: id, cwd, mcpServers)
 local agent = ponos.agent("demo")
 local servers: { McpServer } = {
 	{
@@ -23,20 +23,20 @@ local servers: { McpServer } = {
 		headers = { { name = "H", value = "V" } },
 	},
 }
-local s = agent:session({ id = "rev", cwd = ".", mcp_servers = servers })
+local s = agent:session({ id = "rev", cwd = ".", mcpServers = servers })
 
 -- session:label() is a method (not a property) at runtime.
 assert(s:label() == "demo/rev", "label: " .. s:label())
 
--- prompt result: text, stop_reason, usage table (mock MOCK_USAGE=5,10,2,3),
--- prompt options: timeout_ms.
-local r = s:prompt("review this", { timeout_ms = 5000 })
+-- prompt result: text, stopReason, usage table (mock MOCK_USAGE=5,10,2,3),
+-- prompt options: timeoutMs.
+local r = s:prompt("review this", { timeoutMs = 5000 })
 assert(r.text == "review this", "text: " .. r.text)
-assert(r.stop_reason == "end_turn", "stop_reason: " .. r.stop_reason)
+assert(r.stopReason == "end_turn", "stopReason: " .. r.stopReason)
 assert(r.usage.input == 2, "usage.input: " .. tostring(r.usage.input))
 assert(r.usage.output == 3, "usage.output: " .. tostring(r.usage.output))
-assert(r.usage.cache_read == 0, "usage.cache_read: " .. tostring(r.usage.cache_read))
-assert(r.usage.cache_write == 0, "usage.cache_write: " .. tostring(r.usage.cache_write))
+assert(r.usage.cacheRead == 0, "usage.cacheRead: " .. tostring(r.usage.cacheRead))
+assert(r.usage.cacheWrite == 0, "usage.cacheWrite: " .. tostring(r.usage.cacheWrite))
 assert(tostring(r) == r.text, "tostring sugar: " .. tostring(r))
 
 -- ponos.agent(AgentSpec: command, args, env) — registry-free.
@@ -68,14 +68,14 @@ local sr = result_agent:session({
 local rr = sr:prompt("review")
 assert(rr.result ~= nil, "result submitted")
 assert(rr.result.verdict == "approve", "result.verdict: " .. tostring(rr.result.verdict))
-assert(rr.stop_reason == "end_turn", "result stop_reason: " .. rr.stop_reason)
+assert(rr.stopReason == "end_turn", "result stopReason: " .. rr.stopReason)
 sr:close()
 
--- session:cancel() on a hanging turn → stop_reason == "cancelled".
+-- session:cancel() on a hanging turn → stopReason == "cancelled".
 local hang = ponos.agent("demo-hang")
 local sh = hang:session()
 local hanging = ponos.spawn(function()
-	return sh:prompt("take your time").stop_reason
+	return sh:prompt("take your time").stopReason
 end)
 ponos.sleep(100)
 sh:cancel()

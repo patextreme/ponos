@@ -29,7 +29,7 @@ Scripts SHALL be able to `require` modules by relative path from the requiring f
 - **THEN** the require call raises a Lua error naming the unresolved path
 
 ### Requirement: Agent and session API
-The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), `mcp_servers`, and `result` (a JSON Schema expressed as a Luau table; the option's semantics are specified by the typed-results capability). Two `ponos.agent` calls for the same name SHALL return independent factory objects.
+The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), `mcpServers`, and `result` (a JSON Schema expressed as a Luau table; the option's semantics are specified by the typed-results capability). Two `ponos.agent` calls for the same name SHALL return independent factory objects.
 
 #### Scenario: Session creation
 - **WHEN** a script calls `ponos.agent("claude"):session({ id = "reviewer" })`
@@ -44,26 +44,26 @@ The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an age
 - **THEN** the factories keep independent session counters: both first sessions are labeled `claude/s1`
 
 #### Scenario: Unknown agent name
-- **WHEN** a script calls `ponos.agent("nope")` and `nope` exists in no registry
+- **WHEN** `ponos.agent("nope")` is called and `nope` exists in no registry
 - **THEN** a Lua error is raised naming the unresolved agent
 
 ### Requirement: Prompt returns a result table
-`session:prompt(text, options?)` SHALL send one prompt turn and return a table with `text` (final agent message string), `stop_reason` (`"end_turn"`, `"max_tokens"`, `"max_turn_requests"`, `"refusal"`, or `"cancelled"`), `usage` (`input`, `cache_read`, `cache_write`, `output` token counts, zero when unreported), and `result` (the turn's last accepted typed submission converted to a Luau value; `nil` when the session declared no contract or the turn had no accepted submission — the field's semantics are specified by the typed-results capability). The result table SHALL be directly string-coercible to `text` via `__tostring`. Options SHALL accept `timeout_ms`.
+`session:prompt(text, options?)` SHALL send one prompt turn and return a table with `text` (final agent message string), `stopReason` (`"end_turn"`, `"max_tokens"`, `"max_turn_requests"`, `"refusal"`, or `"cancelled"`), `usage` (`input`, `cacheRead`, `cacheWrite`, `output` token counts, zero when unreported), and `result` (the turn's last accepted typed submission converted to a Luau value; `nil` when the session declared no contract or the turn had no accepted submission — the field's semantics are specified by the typed-results capability). The result table SHALL be directly string-coercible to `text` via `__tostring`. Options SHALL accept `timeoutMs`.
 
 #### Scenario: Successful turn
 - **WHEN** `local r = s:prompt("hi")` completes normally
-- **THEN** `r.text` is the agent's final message, `tostring(r)` equals `r.text`, and `r.stop_reason == "end_turn"`
+- **THEN** `r.text` is the agent's final message, `tostring(r)` equals `r.text`, and `r.stopReason == "end_turn"`
 
 #### Scenario: Timeout is an error
-- **WHEN** `s:prompt("...", { timeout_ms = 50 })` exceeds its timeout
+- **WHEN** `s:prompt("...", { timeoutMs = 50 })` exceeds its timeout
 - **THEN** the turn is cancelled via `session/cancel` and the call raises a catchable Lua timeout error
 
 ### Requirement: Cancellation is control flow, not failure
-`session:cancel()` SHALL be callable while another task is blocked in `prompt` on that session; it sends `session/cancel`, and the awaiting `prompt` returns normally with `stop_reason = "cancelled"` rather than raising.
+`session:cancel()` SHALL be callable while another task is blocked in `prompt` on that session; it sends `session/cancel`, and the awaiting `prompt` returns normally with `stopReason = "cancelled"` rather than raising.
 
 #### Scenario: Watchdog cancel
 - **WHEN** task A is blocked in `s:prompt(...)` and task B calls `s:cancel()`
-- **THEN** task A's `prompt` returns a result with `stop_reason == "cancelled"` and no error is raised
+- **THEN** task A's `prompt` returns a result with `stopReason == "cancelled"` and no error is raised
 
 ### Requirement: Task and concurrency primitives
 The `ponos` namespace SHALL provide: `ponos.spawn(fn)` returning a Task object with `:await()`, `ponos.join({task, ...})` waiting for all tasks, `ponos.map(items, fn, options?)` running `fn` per item with optional `concurrency` limit (default unlimited) and returning per-item outcome entries, and `ponos.sleep(ms)`. Awaiting an errored task SHALL re-raise its error at the await site. `ponos.map` results SHALL carry each item's success value or error without throwing wholesale. A task error is delivered when observed via `:await()`, `join`, or carried in `ponos.map` results, whether or not the script catches or inspects it; a task error never delivered by script end SHALL fail the run (error to stderr, non-zero exit).

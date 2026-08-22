@@ -16,8 +16,8 @@
 -- Token counts reported for a completed turn (zero when unreported).
 export type Usage = {
 	input: number,
-	cache_read: number,
-	cache_write: number,
+	cacheRead: number,
+	cacheWrite: number,
 	output: number,
 }
 
@@ -29,7 +29,7 @@ export type Usage = {
 -- contract or the turn had no accepted submission.
 export type PromptResult = {
 	text: string,
-	stop_reason: string,
+	stopReason: string,
 	usage: Usage,
 	result: any?,
 }
@@ -39,7 +39,7 @@ export type EnvVariable = {
 	value: string,
 }
 
--- stdio MCP server (`mcp_servers` entry, `{ type = "stdio", … }`).
+-- stdio MCP server (`mcpServers` entry, `{ type = "stdio", … }`).
 export type McpServerStdio = {
 	type: "stdio",
 	name: string,
@@ -48,7 +48,7 @@ export type McpServerStdio = {
 	env: { EnvVariable }?,
 }
 
--- http MCP server (`mcp_servers` entry, `{ type = "http", … }`).
+-- http MCP server (`mcpServers` entry, `{ type = "http", … }`).
 export type McpServerHttp = {
 	type: "http",
 	name: string,
@@ -66,13 +66,13 @@ export type McpServer = McpServerStdio | McpServerHttp
 export type SessionOptions = {
 	id: string?,
 	cwd: string?,
-	mcp_servers: { McpServer }?,
+	mcpServers: { McpServer }?,
 	result: { [string]: any }?,
 }
 
 -- Options for `session:prompt(text, …)`.
 export type PromptOptions = {
-	timeout_ms: number?,
+	timeoutMs: number?,
 }
 
 -- Inline agent spec for `ponos.agent({ … })` (skips the registry).
