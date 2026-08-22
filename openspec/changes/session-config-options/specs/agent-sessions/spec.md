@@ -29,5 +29,5 @@ ponos SHALL declare exactly one client capability during initialization: `sessio
 - **THEN** ponos replies promptly and the turn continues toward completion
 
 #### Scenario: Config option updates are consumed
-- **WHEN** an agent sends a `config_option_update` notification
+- **WHEN** an agent sends a `session/update` carrying a `config_option_update`
 - **THEN** ponos folds the update into that session's option state (no reply exists for notifications)

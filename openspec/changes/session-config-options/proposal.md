@@ -9,7 +9,7 @@ ACP agents increasingly expose per-session configuration — most importantly mo
 - New session API: `session:configOptions()` returns the live option list (empty table when the agent offers none); `session:setConfig(id, value)` sets a string (select value id) or boolean option, hard-erroring on agent rejection or unsupported method.
 - `setConfig` is serialized with prompt turns via the existing turn lock: config changes apply strictly between turns.
 - Renderer lifecycle lines on `setConfig` success and on agent-pushed config changes (session-attributed).
-- Mock agent gains env-scripted knobs: `MOCK_CONFIG_OPTIONS` (advertise options in `session/new`), `MOCK_CONFIG_REJECT` (fail `session/set_config_option`), `MOCK_CONFIG_UPDATE` (push a mid-session `config_option_update`).
+- Mock agent gains env-scripted knobs: `MOCK_CONFIG_OPTIONS` (advertise options in `session/new`), `MOCK_CONFIG_REJECT` (fail `session/set_config_option`), `MOCK_CONFIG_UPDATE` (push a mid-session `config_option_update`), `MOCK_CONFIG_ECHO` (echo an option's current value in turn output, making effective-config changes observable).
 - New bundled example `examples/model-fanout.luau` with its explicit entry in `tests/examples.rs`.
 - Type definitions extended with `configOptions`/`setConfig` and the option-table types; probe exercises them.
 
@@ -26,6 +26,6 @@ ACP agents increasingly expose per-session configuration — most importantly mo
 
 ## References
 
-- Ordering: `add-typed-agent-results` (in progress) archives first, then `rename-script-api-camelcase`, then this change. This change's deltas are written against the post-`add-typed-agent-results` main-spec text (its `result` additions and permission auto-allow are carried forward) and use the camelCase names.
+- Ordering: `add-typed-agent-results` and `rename-script-api-camelcase` have both archived (their `result` additions, permission auto-allow, and renames are synced into the main specs and carried forward here). This change's deltas are written against the post-rename main-spec text and use the camelCase names.
 - ACP schema 1.4 (pinned via `agent-client-protocol` 1.3) types all needed messages; no dependency change.
 - Out of scope by design: model aliasing sugar (`setModel`), create-time config in `session()` options, native `session/set_mode` (the flagship adapter exposes mode as config id `mode`, covered by `setConfig`), timeouts on `setConfig`.

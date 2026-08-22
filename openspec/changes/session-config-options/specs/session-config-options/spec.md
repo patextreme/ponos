@@ -15,7 +15,7 @@ ponos SHALL capture the `configOptions` array from each `session/new` response a
 - **THEN** `session:configOptions()` reports them with their advertised current values
 
 #### Scenario: Agent-pushed update is folded
-- **WHEN** the agent sends a `config_option_update` notification mid-session
+- **WHEN** the agent sends a `session/update` carrying `config_option_update` mid-session
 - **THEN** subsequent `session:configOptions()` calls report the new option state
 
 ### Requirement: Session API exposes config options
@@ -30,7 +30,7 @@ Session objects SHALL provide `configOptions()` returning the session's live opt
 - **THEN** `s:configOptions()` returns an empty table
 
 ### Requirement: setConfig changes options between turns
-Session objects SHALL provide `setConfig(id, value)` accepting a string (select value id) or boolean value; any other Luau type SHALL raise a Lua error before anything is sent. `setConfig` SHALL be serialized with prompt turns on the same session: a call issued while a turn is in flight waits for that turn to complete, so config changes apply strictly between turns. On agent rejection or unsupported-method error, `setConfig` SHALL raise a Lua error carrying the agent's message; on success it SHALL update the session's option state from the response and return nothing meaningful.
+Session objects SHALL provide `setConfig(id, value)` accepting a string (select value id) or boolean value; any other Luau type SHALL raise a Lua error before anything is sent. `setConfig` SHALL be serialized with prompt turns on the same session: a call issued while a turn is in flight waits for that turn to complete, so config changes apply strictly between turns. On agent rejection or unsupported-method error, `setConfig` SHALL raise a Lua error carrying the agent's message; on success it SHALL update the session's option state from the response and return nil.
 
 #### Scenario: Switching model before first prompt
 - **WHEN** `s:setConfig("model", "claude-haiku-4-5")` succeeds on a fresh session
@@ -49,8 +49,12 @@ Session objects SHALL provide `setConfig(id, value)` accepting a string (select 
 - **THEN** `setConfig` raises a catchable Lua error rather than silently succeeding
 
 ### Requirement: Config changes are rendered
-Successful `setConfig` calls and agent-pushed `config_option_update` changes SHALL each render one session-attributed lifecycle line naming the changed option id and value.
+Successful `setConfig` calls and agent-pushed `config_option_update` changes SHALL each render one session-attributed lifecycle line naming each changed option id and its new value. An agent-pushed update arriving with no prior option state SHALL render every advertised option as changed.
 
 #### Scenario: Lifecycle line on set
 - **WHEN** `s:setConfig("model", "opus")` succeeds
+- **THEN** the renderer emits a lifecycle line for that session naming `model` and its new value
+
+#### Scenario: Lifecycle line on agent-pushed change
+- **WHEN** the agent pushes a `config_option_update` changing the `model` option mid-session
 - **THEN** the renderer emits a lifecycle line for that session naming `model` and its new value
