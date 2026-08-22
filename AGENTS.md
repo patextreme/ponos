@@ -43,8 +43,11 @@ the same pin. Don't update the pin casually.
   debug); `require.rs` resolves `.luau` modules relative to the requiring file
   and rejects escapes. One deviation: a `coroutine` table with only `yield`
   stays visible because the async runtime needs it.
-- `src/acp/` — ACP client over stdio. ponos declares no client capabilities:
-  every agent→client request gets method-not-found so turns never hang.
+- `src/acp/` — ACP client over stdio. ponos declares no client capabilities;
+  `session/request_permission` is answered headless allow-all (first
+  `AllowAlways`, else the first offered allow option — README has the
+  contract), every other agent→client request gets method-not-found so
+  turns never hang.
 - `src/task.rs` — `ponos.spawn`/`join`/`map` concurrency primitives.
 - `src/render/` — streaming output renderer (color/quiet/verbose modes).
 

@@ -24,6 +24,7 @@ fn opts(label: &str) -> SessionOptions {
         cwd: std::env::temp_dir(),
         mcp_servers: vec![],
         label: label.to_string(),
+        result: None,
     }
 }
 

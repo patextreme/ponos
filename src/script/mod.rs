@@ -119,6 +119,20 @@ fn new_session_obj(lua: &Lua, handle: SessionHandle) -> mlua::Result<Table> {
                     usage.set("cache_write", outcome.usage.cache_write)?;
                     usage.set("output", outcome.usage.output)?;
                     result.set("usage", usage)?;
+                    // The turn's last accepted typed submission as a Luau
+                    // value, or nil when there was none. JSON null also
+                    // arrives as nil (mlua's default would produce its
+                    // null userdata sentinel instead).
+                    let submitted = outcome.result.as_ref().map_or(Value::Nil, |json| {
+                        lua.to_value_with(
+                            json,
+                            mlua::serde::ser::Options::new()
+                                .serialize_none_to_null(false)
+                                .serialize_unit_to_null(false),
+                        )
+                        .unwrap_or(Value::Nil)
+                    });
+                    result.set("result", submitted)?;
 
                     let meta = lua.create_table()?;
                     meta.set(
@@ -217,6 +231,22 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                     })?;
                 }
 
+                // Typed result contract: eager compilation so schema errors
+                // fail at the author's line, before any subprocess spawns.
+                let result = match opts.get::<Option<Value>>("result")? {
+                    Some(raw) => {
+                        let json: serde_json::Value = lua.from_value(raw).map_err(|e| {
+                            mlua::Error::runtime(format!("invalid result schema: {e}"))
+                        })?;
+                        Some(
+                            crate::result_contract::ResultContract::compile(json).map_err(|e| {
+                                mlua::Error::runtime(format!("invalid result schema: {e}"))
+                            })?,
+                        )
+                    }
+                    None => None,
+                };
+
                 state
                     .renderer
                     .lifecycle(&format!("{label}: spawning agent"));
@@ -226,6 +256,7 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                         cwd,
                         mcp_servers,
                         label: label.clone(),
+                        result,
                     },
                     state.renderer.clone(),
                 )

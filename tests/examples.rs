@@ -22,7 +22,8 @@ fn project(example: &str, agent_env: &[(&str, &str)]) -> PathBuf {
         mock_bin()
     );
     for (k, v) in agent_env {
-        config.push_str(&format!("{k} = \"{v}\"\n"));
+        // TOML literal string: env values may carry double quotes (JSON).
+        config.push_str(&format!("{k} = '{v}'\n"));
     }
     std::fs::write(dir.join(".ponos").join("config.toml"), config).unwrap();
     dir
@@ -60,4 +61,12 @@ fn example_fanout() {
 #[test]
 fn example_watchdog() {
     run_example("watchdog.luau", &[("MOCK_HANG", "1")]);
+}
+
+#[test]
+fn example_typed_results() {
+    run_example(
+        "typed_results.luau",
+        &[("MOCK_SUBMIT", r#"{"verdict":"approve","score":8}"#)],
+    );
 }

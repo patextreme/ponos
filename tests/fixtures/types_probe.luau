@@ -50,6 +50,27 @@ local ri = si:prompt("ignored")
 assert(ri.text == "inline reply", "inline text: " .. ri.text)
 si:close()
 
+-- Typed results (SessionOptions.result / PromptResult.result): a result
+-- session whose mock agent submits through the injected MCP bridge; the
+-- outcome's `result` field carries the accepted submission end to end.
+local result_agent = ponos.agent({
+	command = "@MOCK_BIN@",
+	args = {},
+	env = { MOCK_SUBMIT = '{"verdict":"approve"}' },
+})
+local sr = result_agent:session({
+	result = {
+		type = "object",
+		properties = { verdict = { type = "string" } },
+		required = { "verdict" },
+	},
+})
+local rr = sr:prompt("review")
+assert(rr.result ~= nil, "result submitted")
+assert(rr.result.verdict == "approve", "result.verdict: " .. tostring(rr.result.verdict))
+assert(rr.stop_reason == "end_turn", "result stop_reason: " .. rr.stop_reason)
+sr:close()
+
 -- session:cancel() on a hanging turn → stop_reason == "cancelled".
 local hang = ponos.agent("demo-hang")
 local sh = hang:session()

@@ -39,6 +39,12 @@ enum Command {
 
     /// Print the Luau type definitions for the ponos script API.
     Types,
+
+    /// Hidden: MCP bridge server for typed results. Spawned per result
+    /// session by the agent, as suggested in `session/new { mcpServers }`;
+    /// not part of the user-facing surface.
+    #[command(name = "__bridge", hide = true)]
+    Bridge,
 }
 
 /// Luau type definitions for the `ponos` script API. Single source of
@@ -58,6 +64,8 @@ enum Parsed {
     },
     /// `ponos types` — print definitions, exit 0, touch nothing else.
     Types,
+    /// `ponos __bridge` — typed-results MCP server over stdio.
+    Bridge,
 }
 
 /// Parse CLI arguments (unit-testable).
@@ -80,6 +88,7 @@ fn parse(args: &[String]) -> Result<Parsed, clap::Error> {
             verbose,
         },
         Command::Types => Parsed::Types,
+        Command::Bridge => Parsed::Bridge,
     })
 }
 
@@ -103,6 +112,7 @@ pub fn main() -> ExitCode {
             verbose,
         }) => (script, render, verbose),
         Ok(Parsed::Types) => return print_types(),
+        Ok(Parsed::Bridge) => return crate::bridge::run(),
         Err(e) => {
             // --help / --version are "errors" that carry their own output
             // and exit code.
@@ -186,7 +196,7 @@ mod tests {
     fn types_subcommand_parses_without_run_arguments() {
         match parse(&args(&["types"])).unwrap() {
             Parsed::Types => {}
-            Parsed::Run { .. } => panic!("expected Types"),
+            Parsed::Run { .. } | Parsed::Bridge => panic!("expected Types"),
         }
     }
 

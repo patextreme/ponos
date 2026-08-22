@@ -28,6 +28,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 async-process = "2"
+# MCP server+client used by the typed-results bridge (`ponos __bridge`)
+# and by mock-agent's MCP client. IO + child-process transports only: no
+# HTTP, no auth, no client-side SSE.
+rmcp = { version = "3", features = ["client", "transport-io", "transport-child-process"] }
+# JSON Schema validation for typed results. Default features disabled:
+# resolve-http/resolve-file would reintroduce network/file access — remote
+# $refs must fail at compile time so runs stay offline.
+jsonschema = { version = "0.50", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

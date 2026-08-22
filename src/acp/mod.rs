@@ -1,15 +1,23 @@
 //! ACP client wiring: agent process spawning, the `initialize` handshake,
-//! the per-session driver, and run-end teardown.
+//! the per-session driver, run-end teardown, and typed-result injection.
 //!
 //! Each ponos session owns one agent subprocess. A driver task runs the
 //! JSON-RPC connection: it performs the handshake, creates the ACP session,
 //! then serves a command channel (`prompt` / `cancel` / `close`). Streaming
 //! `session/update` notifications are folded into the in-flight turn's
 //! accumulator and forwarded to the renderer. ponos declares no client
-//! capabilities, and any agent-to-client request is answered automatically
-//! with a JSON-RPC "method not found" (-32601) error by the dispatch chain
-//! (we register no handlers for them), so turns never hang on permissions,
-//! fs, terminal, or elicitation calls.
+//! capabilities; agent-to-client requests are answered automatically so
+//! turns never hang: fs/terminal/elicitation (and anything else unknown)
+//! with a JSON-RPC "method not found" (-32601) error by the dispatch chain,
+//! and `session/request_permission` with the headless allow-all selection
+//! (prefer `AllowAlways`, else the first other allow option) registered
+//! below it.
+//!
+//! Sessions with a typed result contract (`agent:session({ result = … })`)
+//! additionally bind a per-session Unix-domain result channel and offer
+//! the agent the `ponos __bridge` MCP server in `session/new`; accepted
+//! submissions land in the in-flight turn's slot and ride out on
+//! `TurnOutcome::result`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -17,19 +25,28 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, ContentChunk, InitializeRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PromptRequest, PromptResponse, SessionNotification, SessionUpdate,
-    StopReason, TextContent, Usage,
+    CancelNotification, ContentBlock, ContentChunk, EnvVariable, InitializeRequest, McpServer,
+    McpServerStdio, NewSessionRequest, PermissionOption, PermissionOptionKind, PromptRequest,
+    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason, TextContent, Usage,
 };
 use agent_client_protocol::{AcpAgent, ByteStreams, Client, ConnectionTo};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::config::AgentSpec;
 use crate::render::{DisplayEvent, Renderer};
+use crate::result_contract::{
+    ResultContract, SubmissionSink, bind_result_socket, spawn_result_channel,
+};
 
 /// How long a timed-out prompt waits for the (cancelled) response before
 /// raising the timeout error to the script anyway.
 const CANCEL_GRACE: Duration = Duration::from_secs(2);
+
+/// Fixed sentence appended to every prompt on a session with a typed
+/// result contract. The schema itself travels in the tool, never in
+/// prompt text.
+pub const RESULT_SUBMIT_INSTRUCTION: &str = "When your work is complete, call the `mcp__ponos__result_submit` tool with your final result as the `value` argument; if the tool reports schema violations, fix the value and call it again.";
 
 /// Token counts reported for a turn.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -60,6 +77,10 @@ pub struct TurnOutcome {
     pub stop_reason: String,
     /// Token counts (zero when unreported).
     pub usage: UsageCounts,
+    /// The turn's last accepted typed submission, converted from JSON.
+    /// `None` when the session declared no contract, the turn had no
+    /// accepted submission, or the turn was cancelled/timed out.
+    pub result: Option<serde_json::Value>,
 }
 
 /// Why a prompt turn failed.
@@ -115,6 +136,10 @@ pub struct SessionOptions {
     pub mcp_servers: Vec<McpServer>,
     /// Attribution label, e.g. `claude/s1`.
     pub label: String,
+    /// Typed result contract. When set, ponos injects the result-bridge
+    /// MCP server into the session and appends the submit instruction to
+    /// every prompt.
+    pub result: Option<ResultContract>,
 }
 
 /// Commands sent from Lua-side handles to the session driver.
@@ -133,6 +158,47 @@ enum SessionCmd {
 #[derive(Default)]
 struct TurnFold {
     text: String,
+    /// Whether a turn is currently in flight (submissions landing outside
+    /// a turn are dropped as late).
+    in_flight: bool,
+    /// The turn's last accepted typed submission (last-wins).
+    result: Option<serde_json::Value>,
+}
+
+impl TurnFold {
+    /// A turn starts: a fresh slot, so a turn never observes the previous
+    /// turn's value.
+    fn begin_turn(&mut self) {
+        self.in_flight = true;
+        self.result = None;
+    }
+
+    /// A turn settles: returns the accepted submission, or discards it
+    /// (cancelled / timed-out / failed turns keep `None`).
+    fn settle_turn(&mut self, discard: bool) -> Option<serde_json::Value> {
+        self.in_flight = false;
+        if discard {
+            self.result.take();
+            None
+        } else {
+            self.result.take()
+        }
+    }
+}
+
+/// The submission sink for the result channel: accept into the in-flight
+/// turn's slot (last-wins), or report a late submission (no turn in
+/// flight) so the channel can drop it with a lifecycle line.
+fn submission_sink(fold: Arc<Mutex<TurnFold>>) -> SubmissionSink {
+    Arc::new(move |value| {
+        let mut fold = fold.lock().unwrap();
+        if fold.in_flight {
+            fold.result = Some(value);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 /// A handle from the scripting side to one live agent session.
@@ -257,7 +323,53 @@ pub async fn start_session(
     let fold = Arc::new(Mutex::new(TurnFold::default()));
     let label = opts.label.clone();
 
+    // Typed result contract: bind the per-session channel and offer the
+    // agent the bridge MCP server alongside its own servers. Failures to
+    // set up the channel degrade (result stays nil), never fail the
+    // session.
+    let mut mcp_servers = opts.mcp_servers.clone();
+    let mut result_channel: Option<crate::result_contract::ResultChannel> = None;
+    if let Some(contract) = opts.result.clone() {
+        match std::env::current_exe() {
+            Ok(exe) => match bind_result_socket().await {
+                Ok((listener, path)) => {
+                    let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+                    let channel = spawn_result_channel(
+                        listener,
+                        contract.clone(),
+                        submission_sink(fold.clone()),
+                        renderer.clone(),
+                        label.clone(),
+                        cancel_tx,
+                    );
+                    renderer.lifecycle(&format!(
+                        "{label}: typed-result contract active (socket {})",
+                        path.display()
+                    ));
+                    mcp_servers.push(McpServer::Stdio(
+                        McpServerStdio::new(crate::bridge::SERVER_NAME, exe)
+                            .args(vec!["__bridge".to_string()])
+                            .env(vec![
+                                EnvVariable::new("PONOS_BRIDGE_ADDR", path.display().to_string()),
+                                EnvVariable::new("PONOS_RESULT_SCHEMA", contract.schema_json()),
+                            ]),
+                    ));
+                    result_channel = Some(channel);
+                }
+                Err(e) => renderer.lifecycle(&format!(
+                    "{label}: typed results unavailable (cannot bind result socket: {e}); \
+                     prompts will return result = nil"
+                )),
+            },
+            Err(e) => renderer.lifecycle(&format!(
+                "{label}: typed results unavailable (cannot resolve ponos executable: {e}); \
+                 prompts will return result = nil"
+            )),
+        }
+    }
+
     let driver_label = label.clone();
+    let teardown_label = label.clone();
     let driver_fold = fold.clone();
     let driver_renderer = renderer.clone();
 
@@ -271,16 +383,27 @@ pub async fn start_session(
 
         let builder = Client
             .builder()
-            // Deny-all: ponos declares no client capabilities, so every
-            // agent-to-client request is answered promptly with a
-            // method-not-found (-32601) error. Notifications and responses
-            // pass through to the handlers below.
+            // ponos declares no client capabilities: agent-to-client
+            // requests it has no support for (fs, terminal, elicitation,
+            // …) are answered promptly with a method-not-found (-32601)
+            // error so turns never hang. The one exception — ponos runs
+            // headless and nobody is there to be asked — is
+            // `session/request_permission`, which is passed through
+            // (`retry: true`) to the allow-all handler below.
             .on_receive_dispatch(
                 async move |dispatch: agent_client_protocol::Dispatch, _cx| match dispatch {
-                    agent_client_protocol::Dispatch::Request(_msg, responder) => {
-                        responder
-                            .respond_with_error(agent_client_protocol::Error::method_not_found())?;
-                        Ok(agent_client_protocol::Handled::Yes)
+                    agent_client_protocol::Dispatch::Request(msg, responder) => {
+                        if msg.method() == "session/request_permission" {
+                            Ok(agent_client_protocol::Handled::No {
+                                message: agent_client_protocol::Dispatch::Request(msg, responder),
+                                retry: true,
+                            })
+                        } else {
+                            responder.respond_with_error(
+                                agent_client_protocol::Error::method_not_found(),
+                            )?;
+                            Ok(agent_client_protocol::Handled::Yes)
+                        }
                     }
                     other => Ok(agent_client_protocol::Handled::No {
                         message: other,
@@ -288,6 +411,31 @@ pub async fn start_session(
                     }),
                 },
                 agent_client_protocol::on_receive_dispatch!(),
+            )
+            // Headless allow-all posture: select an allow option the agent
+            // offered — the first `AllowAlways` when present, otherwise the
+            // first other allow-kind option (e.g. `AllowOnce`). An offer
+            // with no allow option at all falls back to method-not-found
+            // (there is nothing to select). Choosing `AllowAlways` may let
+            // the agent persist an allow rule in its own settings beyond
+            // the run (documented in the README).
+            .on_receive_request(
+                async move |req: RequestPermissionRequest,
+                            responder: agent_client_protocol::Responder<
+                    RequestPermissionResponse,
+                >,
+                            _cx| {
+                    match select_allow_option(&req.options) {
+                        Some(option_id) => responder.respond(RequestPermissionResponse::new(
+                            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                option_id,
+                            )),
+                        )),
+                        None => responder
+                            .respond_with_error(agent_client_protocol::Error::method_not_found()),
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
             )
             .on_receive_notification(
                 async move |notif: SessionNotification, _cx| {
@@ -298,7 +446,7 @@ pub async fn start_session(
             );
 
         let cwd = opts.cwd.clone();
-        let mcp_servers = opts.mcp_servers.clone();
+        let mcp_servers = mcp_servers.clone();
 
         let result: Result<(), agent_client_protocol::Error> = builder
             .connect_with(ByteStreams::new(stdin, stdout), move |conn| async move {
@@ -339,6 +487,7 @@ pub async fn start_session(
                             let renderer = driver_renderer.clone();
                             let session_id = session_id.clone();
                             let label = driver_label.clone();
+                            let result_contract = opts.result.is_some();
                             let spawned = conn.spawn(async move {
                                 let outcome = run_turn(
                                     &conn2,
@@ -348,6 +497,7 @@ pub async fn start_session(
                                     &session_id,
                                     text,
                                     timeout,
+                                    result_contract,
                                 )
                                 .await;
                                 let _ = resp.send(outcome);
@@ -383,6 +533,19 @@ pub async fn start_session(
         // Drain the stderr pump so -vv passthrough is complete before the
         // session is reported closed.
         let _ = stderr_task.await;
+        // Tear the result channel down with the session: stop accepting,
+        // unlink the socket, and — if nothing was ever submitted through
+        // it — note the (designed) degradation once.
+        if let Some(channel) = result_channel {
+            let had_results = channel.any_accepted();
+            channel.close().await;
+            if !had_results {
+                renderer.lifecycle(&format!(
+                    "{teardown_label}: session ended without typed results \
+                     (agent never submitted through the result tool)"
+                ));
+            }
+        }
         let _ = done_tx.send(true);
     });
 
@@ -431,6 +594,7 @@ where
 
 /// Drive one prompt turn: send `session/prompt`, race the deadline, fold
 /// streaming updates, and deliver the outcome.
+#[allow(clippy::too_many_arguments)]
 async fn run_turn(
     conn: &ConnectionTo<agent_client_protocol::Agent>,
     fold: &Arc<Mutex<TurnFold>>,
@@ -439,7 +603,19 @@ async fn run_turn(
     session_id: &agent_client_protocol::schema::v1::SessionId,
     text: String,
     timeout: Option<Duration>,
+    result_contract: bool,
 ) -> Result<TurnOutcome, TurnError> {
+    // Fresh slot per turn; submissions landing before this point are late.
+    fold.lock().unwrap().begin_turn();
+
+    // Sessions with a contract append the fixed submit instruction; the
+    // schema itself never enters prompt text (it lives in the tool).
+    let text = if result_contract {
+        format!("{text}\n\n{RESULT_SUBMIT_INSTRUCTION}")
+    } else {
+        text
+    };
+
     let req = PromptRequest::new(
         session_id.clone(),
         vec![ContentBlock::Text(TextContent::new(text))],
@@ -474,16 +650,29 @@ async fn run_turn(
         },
     };
 
-    let resp = response?;
+    let resp = match response {
+        Ok(resp) => resp,
+        Err(e) => {
+            // Cancelled / timed out / failed: any submission the turn had
+            // gathered is discarded.
+            fold.lock().unwrap().settle_turn(true);
+            return Err(e);
+        }
+    };
+    let stop_reason = stop_reason_string(&resp.stop_reason);
     let text = std::mem::take(&mut fold.lock().unwrap().text);
+    // A cancelled turn discards its submission; any other completion
+    // carries the last accepted one.
+    let result = fold.lock().unwrap().settle_turn(stop_reason == "cancelled");
     Ok(TurnOutcome {
         text,
-        stop_reason: stop_reason_string(&resp.stop_reason),
+        stop_reason,
         usage: resp
             .usage
             .as_ref()
             .map(UsageCounts::from_usage)
             .unwrap_or_default(),
+        result,
     })
 }
 
@@ -577,5 +766,94 @@ fn stop_reason_string(reason: &StopReason) -> String {
         StopReason::Refusal => "refusal".into(),
         StopReason::Cancelled => "cancelled".into(),
         _ => "end_turn".into(),
+    }
+}
+
+/// Pick the option to answer a permission request with: the first
+/// `AllowAlways` when offered, otherwise the first other allow-kind
+/// option. `None` when the offer has no allow option at all.
+fn select_allow_option(
+    options: &[PermissionOption],
+) -> Option<agent_client_protocol::schema::v1::PermissionOptionId> {
+    options
+        .iter()
+        .find(|o| matches!(o.kind, PermissionOptionKind::AllowAlways))
+        .or_else(|| {
+            options
+                .iter()
+                .find(|o| matches!(o.kind, PermissionOptionKind::AllowOnce))
+        })
+        .map(|o| o.option_id.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionId};
+
+    fn option(id: &str, kind: PermissionOptionKind) -> PermissionOption {
+        PermissionOption::new(id.to_string(), "label", kind)
+    }
+
+    #[test]
+    fn allow_selection_prefers_allow_always() {
+        let options = vec![
+            option("allow_once", PermissionOptionKind::AllowOnce),
+            option("allow_always", PermissionOptionKind::AllowAlways),
+        ];
+        assert_eq!(
+            select_allow_option(&options),
+            Some(PermissionOptionId::new("allow_always"))
+        );
+    }
+
+    #[test]
+    fn allow_selection_falls_back_to_any_allow_kind() {
+        let options = vec![
+            option("reject_once", PermissionOptionKind::RejectOnce),
+            option("allow_once", PermissionOptionKind::AllowOnce),
+        ];
+        assert_eq!(
+            select_allow_option(&options),
+            Some(PermissionOptionId::new("allow_once"))
+        );
+    }
+
+    #[test]
+    fn allow_selection_reject_only_offer_gets_method_not_found() {
+        let options = vec![
+            option("reject_once", PermissionOptionKind::RejectOnce),
+            option("reject_always", PermissionOptionKind::RejectAlways),
+        ];
+        assert_eq!(select_allow_option(&options), None);
+        assert_eq!(select_allow_option(&[]), None);
+    }
+
+    #[test]
+    fn turn_fold_slot_lifecycle() {
+        let mut fold = TurnFold::default();
+        // Before any turn: submissions are late.
+        assert!(!submission_sink(Arc::new(Mutex::new(TurnFold::default())))(
+            serde_json::json!({"n": 1})
+        ));
+
+        // In flight: accepted, last-wins.
+        fold.begin_turn();
+        assert!(fold.in_flight && fold.result.is_none());
+        fold.result = Some(serde_json::json!({"n": 1}));
+        fold.result = Some(serde_json::json!({"n": 2}));
+        assert_eq!(fold.settle_turn(false), Some(serde_json::json!({"n": 2})));
+        assert!(!fold.in_flight && fold.result.is_none());
+
+        // Fresh slot per turn: a second turn without submissions yields
+        // None even though the first turn had one.
+        fold.begin_turn();
+        assert_eq!(fold.settle_turn(false), None);
+
+        // Discard on cancelled/failed turns.
+        fold.begin_turn();
+        fold.result = Some(serde_json::json!({"n": 3}));
+        assert_eq!(fold.settle_turn(true), None);
+        assert!(!fold.in_flight && fold.result.is_none());
     }
 }

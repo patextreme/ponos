@@ -23,11 +23,15 @@ export type Usage = {
 
 -- The result of `session:prompt(text)`. `tostring(r)` returns `r.text` at
 -- runtime via a metatable; definitions cannot express that sugar, so use
--- `r.text` explicitly when the type checker wants a string.
+-- `r.text` explicitly when the type checker wants a string. `result` is
+-- the turn's typed submission (see `SessionOptions.result`): a Luau value
+-- converted from the accepted JSON, `nil` when the session declared no
+-- contract or the turn had no accepted submission.
 export type PromptResult = {
 	text: string,
 	stop_reason: string,
 	usage: Usage,
+	result: any?,
 }
 
 export type EnvVariable = {
@@ -55,11 +59,15 @@ export type McpServerHttp = {
 export type McpServer = McpServerStdio | McpServerHttp
 
 -- Options for `agent:session(…)`. All fields optional; `id` defaults to
--- `s1, s2, …` per agent, `cwd` to the invocation directory.
+-- `s1, s2, …` per agent, `cwd` to the invocation directory. `result` is a
+-- JSON Schema expressed as a plain Luau table: when set, the session gets
+-- a typed-result contract — prompts carry a submit-tool instruction and
+-- the outcome's `result` field carries the accepted submission.
 export type SessionOptions = {
 	id: string?,
 	cwd: string?,
 	mcp_servers: { McpServer }?,
+	result: { [string]: any }?,
 }
 
 -- Options for `session:prompt(text, …)`.

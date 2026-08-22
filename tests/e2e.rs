@@ -352,6 +352,30 @@ s2:close()
 }
 
 #[test]
+fn plain_session_outcome_has_nil_result() {
+    // Scripting spec "Prompt returns a result table": the `result` field is
+    // nil on sessions that declared no typed-result contract.
+    let dir = tmpdir("plain-nil");
+    let script = write_script(
+        &dir,
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}" }})
+local s = agent:session()
+local r = s:prompt("hi")
+assert(r.text == "hi", r.text)
+assert(r.result == nil, "plain session result must be nil")
+assert(r.stop_reason == "end_turn")
+s:close()
+"#,
+            mock = mock_agent()
+        ),
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
 fn log_and_version_helpers() {
     let dir = tmpdir("helpers");
     let script = write_script(

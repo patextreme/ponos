@@ -79,11 +79,11 @@ Multiple result sessions SHALL operate independently: each session's schema, sub
 - **THEN** each outcome's `result` validates against its own session's schema only
 
 ### Requirement: Graceful degradation
-If the agent does not use the injected server — because it ignores the offered MCP servers, cannot access the ponos binary, or is sandboxed away from the transport — prompts SHALL still complete normally with `result` as `nil`, and ponos SHALL emit exactly one lifecycle log line noting the session ran without typed results. Degradation SHALL NOT raise errors, hang turns, or change `text`/`stop_reason`.
+If the agent does not use the injected server — because it ignores the offered MCP servers, cannot access the ponos binary, or is sandboxed away from the transport — prompts SHALL still complete normally with `result` as `nil`, and ponos SHALL emit exactly one lifecycle diagnostic (a `[ponos]` line shown under `--verbose`) noting the session ran without typed results. Degradation SHALL NOT raise errors, hang turns, or change `text`/`stop_reason`.
 
 #### Scenario: Agent ignores injected servers
 - **WHEN** an agent completes a turn without ever connecting to the injected server
-- **THEN** the turn completes with `result == nil` and one lifecycle log line
+- **THEN** the turn completes with `result == nil` and one lifecycle log line under `--verbose`
 
 #### Scenario: No hang on missing bridge
 - **WHEN** the injected server cannot be spawned by the agent
