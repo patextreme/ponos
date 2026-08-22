@@ -96,6 +96,31 @@ async fn permission_request_denied_turn_still_completes() {
 }
 
 #[tokio::test]
+async fn unsupported_agent_requests_get_method_not_found() {
+    // agent-sessions spec: fs/read_text_file, fs/write_text_file,
+    // terminal/*, and elicitation/create are answered with the
+    // unsupported-method error (asserted inside the mock via MOCK_REQUEST)
+    // and the turn still completes — replies are prompt, never hanging.
+    let mut spec = mock_agent_spec();
+    spec.env.insert(
+        "MOCK_REQUEST".into(),
+        "fs/read_text_file|fs/write_text_file|terminal/create|terminal/output|elicitation/create|not/a/method"
+            .into(),
+    );
+    let session = start_session(&spec, opts("mock/unsupported"), quiet_renderer())
+        .await
+        .expect("session starts");
+    let outcome = session
+        .prompt("hi".into(), None)
+        .await
+        .expect("turn completes after unsupported requests");
+    assert_eq!(outcome.text, "hi");
+    assert_eq!(outcome.stop_reason, "end_turn");
+    session.close();
+    session.join().await;
+}
+
+#[tokio::test]
 async fn chunked_echo_assembles_final_text_and_usage() {
     // Task 4.3: update folding — chunks -> text, usage on the result.
     let mut spec = mock_agent_spec();

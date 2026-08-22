@@ -15,6 +15,11 @@
 //!   offers only `AllowOnce`, `always` offers `AllowOnce` + `AllowAlways`
 //!   (asserts the client selects `allow_always`), `reject` offers only
 //!   reject options (asserts the client's unsupported-method error)
+//! - `MOCK_REQUEST`    — `|`-separated method names sent verbatim as
+//!   agent-to-client requests during each prompt (asserts the client
+//!   answers each with the unsupported-method `-32601` error); use for
+//!   `fs/read_text_file`, `fs/write_text_file`, `terminal/*`,
+//!   `elicitation/create`, or any unknown method
 //! - `MOCK_HANG`        — never respond to prompts unless cancelled
 //! - `MOCK_STDERR`      — write this text to stderr once per prompt
 //! - `MOCK_STOP_REASON` — override the stop reason (default `end_turn`)
@@ -54,8 +59,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, InitializeRequest,
-    InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+    AgentCapabilities, AgentRequest, CancelNotification, ContentBlock, ContentChunk, ExtRequest,
+    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
     PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptRequest,
     PromptResponse, RequestPermissionRequest, SelectedPermissionOutcome, SessionNotification,
     SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
@@ -426,6 +431,46 @@ async fn run_prompt(
                 }
             }
             Err(_) => {} // transport gone: proceed
+        }
+    }
+
+    // Arbitrary agent-to-client requests: each method named in MOCK_REQUEST
+    // is sent verbatim on the wire (via the untagged extension variant),
+    // and the client must answer with the unsupported-method (-32601)
+    // error — never a result, never silence. This pins the headless
+    // catch-all for fs/read_text_file, fs/write_text_file, terminal/*,
+    // elicitation/create, and unknown methods alike.
+    if let Some(list) = std::env::var("MOCK_REQUEST").ok().filter(|l| !l.is_empty()) {
+        for method in list.split('|').map(str::trim).filter(|m| !m.is_empty()) {
+            let params: std::sync::Arc<serde_json::value::RawValue> = std::sync::Arc::from(
+                serde_json::value::RawValue::from_string("{}".to_string())
+                    .expect("empty params object"),
+            );
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            cx.send_request(AgentRequest::ExtMethodRequest(ExtRequest::new(
+                method, params,
+            )))
+            .on_receiving_result(async move |result| {
+                let _ = tx.send(result);
+                Ok(())
+            })?;
+            match rx.await {
+                Ok(Ok(value)) => {
+                    panic!("client should answer {method:?} with method-not-found, got: {value:?}")
+                }
+                Ok(Err(e)) => {
+                    let msg = format!("{e:?}");
+                    if msg.contains("incoming_transport_closed") {
+                        // Client vanished mid-request: proceed without asserting.
+                    } else {
+                        assert!(
+                            msg.contains("ethod not found") || msg.contains("-32601"),
+                            "{method} should get -32601, got: {msg}"
+                        );
+                    }
+                }
+                Err(_) => {} // transport gone: proceed
+            }
         }
     }
 
