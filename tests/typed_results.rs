@@ -441,12 +441,11 @@ s:close()
 }
 
 #[test]
-fn prompt_on_result_session_carries_submit_instruction() {
-    // Task 5.3: the augmented prompt ends with the fixed sentence (the
-    // mock echoes the prompt text it received).
-    let dir = tmpdir("augment");
-    let sentence = "When your work is complete, call the `mcp__ponos__result_submit` tool with your final result as the `value` argument; if the tool reports schema violations, fix the value and call it again.";
-    let sentence_lit = format!("{sentence:?}");
+fn prompt_on_result_session_passes_text_verbatim() {
+    // The prompt reaches the agent byte-identical to what the script
+    // passed: no ponos-appended submit instruction (the mock echoes the
+    // prompt text it received).
+    let dir = tmpdir("verbatim");
     assert_ok(
         &dir,
         &format!(
@@ -454,9 +453,8 @@ fn prompt_on_result_session_carries_submit_instruction() {
 local agent = ponos.agent({mock})
 local s = agent:session({{ result = {{ type = "object" }} }})
 local r = s:prompt("hello")
-local suffix = {sentence}
-assert(r.text:sub(-#suffix) == suffix, r.text)
--- Plain sessions are unaugmented.
+assert(r.text == "hello", r.text)
+-- Plain sessions are equally unmodified.
 s:close()
 local plain = ponos.agent({mock})
 local ps = plain:session()
@@ -465,7 +463,6 @@ assert(pr.text == "hello", pr.text)
 ps:close()
 "#,
             mock = mock_agent(&[("MOCK_NO_MCP", "1")]),
-            sentence = sentence_lit,
         ),
     );
 }

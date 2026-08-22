@@ -164,8 +164,12 @@ a JSON Schema as a plain Luau table. ponos then
   exposing a single tool `result_submit` (agents that derive tool names
   call it `mcp__ponos__result_submit`). The declared schema travels in the
   tool's `value` argument — it never enters prompt text;
-- appends one fixed sentence to each prompt telling the agent to submit
-  its final result by calling the tool;
+- sends every prompt verbatim (ponos never appends to or otherwise
+  modifies the script's prompt text); the submit guidance — when to call
+  and how the result is passed — lives in the `result_submit` tool
+  description, which the agent discovers through normal tool listing.
+  Agents that don't submit on their own may need the script to mention
+  submission in the prompt itself;
 - validates each submission against the schema and reports violations back
   as a tool error the agent can see and fix *inside the same turn* — the
   retry loop that makes typed results reliable.

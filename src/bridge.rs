@@ -52,8 +52,9 @@ pub fn wrap_input_schema(schema: &serde_json::Value) -> JsonObject {
 
 /// The tool listing (shared with tests).
 pub fn tool_for(schema: &serde_json::Value) -> Tool {
-    let description = "Submit the final result for this task. The `value` argument must \
-         satisfy the session's declared JSON Schema; violations are reported back so you \
+    let description = "Call this when your work on the task is complete, with the final \
+         result as the `value` argument. The `value` argument must satisfy the \
+         session's declared JSON Schema; violations are reported back so you \
          can correct the value and submit again.";
     let mut tool = Tool::default();
     tool.name = TOOL_NAME.into();
@@ -199,4 +200,27 @@ async fn run_async() -> Result<(), String> {
         .await
         .map_err(|e| format!("server task failed: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_description_carries_submit_guidance() {
+        // Spec "Tool description carries the submit guidance": the tool's
+        // description must tell the agent when to call it and how the
+        // result is passed, so the guidance survives without any
+        // prompt-side injection.
+        let tool = tool_for(&serde_json::json!({"type": "object"}));
+        let description = tool.description.as_deref().expect("description set");
+        assert!(
+            description.contains("when your work"),
+            "missing submit timing: {description}"
+        );
+        assert!(
+            description.contains("`value` argument"),
+            "missing value-argument naming: {description}"
+        );
+    }
 }

@@ -50,11 +50,6 @@ use crate::result_contract::{
 /// raising the timeout error to the script anyway.
 const CANCEL_GRACE: Duration = Duration::from_secs(2);
 
-/// Fixed sentence appended to every prompt on a session with a typed
-/// result contract. The schema itself travels in the tool, never in
-/// prompt text.
-pub const RESULT_SUBMIT_INSTRUCTION: &str = "When your work is complete, call the `mcp__ponos__result_submit` tool with your final result as the `value` argument; if the tool reports schema violations, fix the value and call it again.";
-
 /// Token counts reported for a turn.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct UsageCounts {
@@ -676,7 +671,6 @@ pub async fn start_session(
                             let renderer = driver_renderer.clone();
                             let session_id = session_id.clone();
                             let label = driver_label.clone();
-                            let result_contract = opts.result.is_some();
                             let spawned = conn.spawn(async move {
                                 let outcome = run_turn(
                                     &conn2,
@@ -686,7 +680,6 @@ pub async fn start_session(
                                     &session_id,
                                     text,
                                     timeout,
-                                    result_contract,
                                 )
                                 .await;
                                 let _ = resp.send(outcome);
@@ -820,18 +813,9 @@ async fn run_turn(
     session_id: &agent_client_protocol::schema::v1::SessionId,
     text: String,
     timeout: Option<Duration>,
-    result_contract: bool,
 ) -> Result<TurnOutcome, TurnError> {
     // Fresh slot per turn; submissions landing before this point are late.
     fold.lock().unwrap().begin_turn();
-
-    // Sessions with a contract append the fixed submit instruction; the
-    // schema itself never enters prompt text (it lives in the tool).
-    let text = if result_contract {
-        format!("{text}\n\n{RESULT_SUBMIT_INSTRUCTION}")
-    } else {
-        text
-    };
 
     let req = PromptRequest::new(
         session_id.clone(),
