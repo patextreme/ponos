@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+mod common;
+
 fn ponos_bin() -> &'static str {
     env!("CARGO_BIN_EXE_ponos")
 }
@@ -167,6 +169,7 @@ s:prompt("hi")
 "#,
     );
     let (code, stdout, _) = project.run(&script, &["--no-color"]);
+    let stdout = common::strip_timestamps(&stdout);
     assert_eq!(code, 0, "{stdout}");
     assert!(stdout.contains("[mock/s1]"), "{stdout}");
     assert!(!stdout.contains('\x1b'), "no ANSI expected:\n{stdout}");
@@ -184,6 +187,7 @@ s:prompt("hi")
 "#,
     );
     let (code, stdout, _) = project.run(&script, &["--quiet"]);
+    let stdout = common::strip_timestamps(&stdout);
     assert_eq!(code, 0, "{stdout}");
     assert!(stdout.contains("script-said-this"), "{stdout}");
     assert!(stdout.contains("[ponos] log-line"), "{stdout}");
@@ -200,6 +204,7 @@ s:prompt("hi")
 "#,
     );
     let (code, stdout, _) = project.run(&script, &["-vv"]);
+    let stdout = common::strip_timestamps(&stdout);
     assert_eq!(code, 0, "{stdout}");
     assert!(
         stdout.contains("agent-chatter"),
@@ -225,6 +230,7 @@ s:prompt("hi")
 "#,
     );
     let (code, stdout, _) = project.run(&script, &[]);
+    let stdout = common::strip_timestamps(&stdout);
     assert_eq!(code, 0, "{stdout}");
     assert!(
         stdout.contains("context: 5/10 tokens"),
@@ -282,13 +288,244 @@ s:close()
         .output()
         .expect("run ponos");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stripped = common::strip_timestamps(&stdout);
     assert!(output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("[ponos] mock/s1: config changed: model=sonnet"),
+        stripped.contains("[ponos] mock/s1: config changed: model=sonnet"),
         "pushed change not rendered:\n{stdout}"
     );
     assert!(
-        stdout.contains("[ponos] mock/s1: config changed: model=haiku"),
+        stripped.contains("[ponos] mock/s1: config changed: model=haiku"),
         "set change not rendered:\n{stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tool-line rendering (agent-sessions spec: the tool-line contract)
+// ---------------------------------------------------------------------------
+
+/// Bodies of the rendered `tool: …` lines, timestamps stripped. Runs must
+/// use `--no-color` so the `] tool: ` split is exact.
+fn tool_bodies(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(common::strip_timestamp)
+        .filter_map(|l| l.split_once("] tool: ").map(|(_, body)| body.to_string()))
+        .collect()
+}
+
+/// The seconds value of a terminal line's `(status, X.Ys)` suffix.
+fn terminal_duration(body: &str, status: &str) -> f64 {
+    let rest = body
+        .rsplit_once(&format!("({status}, "))
+        .unwrap_or_else(|| panic!("no ({status}, …) suffix: {body:?}"))
+        .1;
+    let rest = rest
+        .strip_suffix(')')
+        .unwrap_or_else(|| panic!("no closing paren: {rest:?}"));
+    let secs = rest
+        .strip_suffix('s')
+        .unwrap_or_else(|| panic!("no s unit: {rest:?}"));
+    // `Mm SS.Ss` above a minute: take both parts.
+    if let Some((mins, s)) = secs.split_once("m ") {
+        mins.trim().parse::<f64>().unwrap() * 60.0 + s.parse::<f64>().unwrap()
+    } else {
+        secs.parse::<f64>().unwrap()
+    }
+}
+
+fn run_prompt_script(project: &Project, flags: &[&str]) -> String {
+    let script = project.script(
+        r#"
+local s = ponos.agent("mock"):session()
+s:prompt("hi")
+s:close()
+"#,
+    );
+    let (code, stdout, _) = project.run(&script, flags);
+    assert_eq!(code, 0, "{stdout}");
+    stdout
+}
+
+#[test]
+fn tool_line_renders_start_and_terminal_only() {
+    // agent-sessions spec "Tool call renders start and terminal lines" +
+    // "Repeated statuses do not flood the log": the full
+    // pending → in_progress → in_progress → completed sequence renders
+    // exactly two lines — the bare title at start, title + status +
+    // duration at completion. The repeated in_progress renders nothing.
+    let project = Project::new(
+        "tool-flow",
+        &[(
+            "MOCK_TOOL_FLOW",
+            "pending,in_progress,in_progress,completed",
+        )],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    let lines = tool_bodies(&stdout);
+    assert_eq!(lines.len(), 2, "exactly start + terminal:\n{stdout}");
+    assert_eq!(lines[0], "Search files \"foo\"", "start line:\n{stdout}");
+    assert!(
+        lines[1].starts_with("Search files \"foo\" (completed, ") && lines[1].ends_with("s)"),
+        "terminal line:\n{stdout}"
+    );
+    // Titles resolve through the id→title map: never the raw call id.
+    assert!(
+        !stdout.contains("tool-flow-1"),
+        "raw call id leaked:\n{stdout}"
+    );
+}
+
+#[test]
+fn tool_line_re_sent_terminal_status_is_silent() {
+    // agent-sessions spec "Repeated statuses do not flood the log": a
+    // re-sent terminal status renders nothing beyond its first line.
+    let project = Project::new(
+        "tool-repeat",
+        &[("MOCK_TOOL_FLOW", "pending,completed,completed")],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    let lines = tool_bodies(&stdout);
+    assert_eq!(lines.len(), 1, "only the first terminal renders:\n{stdout}");
+    assert!(
+        lines[0].starts_with("Search files \"foo\" (completed, "),
+        "terminal line:\n{stdout}"
+    );
+}
+
+#[test]
+fn tool_line_pending_is_silent() {
+    // agent-sessions spec "Pending is silent": a pending announcement
+    // renders no line at all.
+    let project = Project::new("tool-pending", &[("MOCK_TOOL_FLOW", "pending")]);
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    assert!(
+        tool_bodies(&stdout).is_empty(),
+        "pending must not render:\n{stdout}"
+    );
+}
+
+#[test]
+fn tool_line_unannounced_update_falls_back_to_call_id() {
+    // agent-sessions spec "Unannounced update falls back to the call id":
+    // `!`-prefixed entries arrive without any `tool_call` announcement,
+    // so the lines name the raw id.
+    let project = Project::new(
+        "tool-unannounced",
+        &[("MOCK_TOOL_FLOW", "!in_progress,!completed")],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    let lines = tool_bodies(&stdout);
+    assert_eq!(lines.len(), 2, "start + terminal still render:\n{stdout}");
+    assert_eq!(lines[0], "tool-flow-1", "raw-id start line:\n{stdout}");
+    assert!(
+        lines[1].starts_with("tool-flow-1 (completed, ") && lines[1].ends_with("s)"),
+        "raw-id terminal line:\n{stdout}"
+    );
+}
+
+#[test]
+fn tool_line_direct_completion_measures_from_first_observation() {
+    // agent-sessions spec "Direct completion without progress": pending
+    // → completed with no in_progress renders only the terminal line,
+    // duration measured from first observation (the pending
+    // announcement) — MOCK_DELAY_MS=120 guarantees a non-trivial span.
+    let project = Project::new(
+        "tool-direct",
+        &[
+            ("MOCK_TOOL_FLOW", "pending,completed"),
+            ("MOCK_DELAY_MS", "120"),
+        ],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    let lines = tool_bodies(&stdout);
+    assert_eq!(lines.len(), 1, "terminal line only:\n{stdout}");
+    assert!(
+        lines[0].starts_with("Search files \"foo\" (completed, "),
+        "terminal line:\n{stdout}"
+    );
+    assert!(
+        terminal_duration(&lines[0], "completed") >= 0.1,
+        "duration must span the announcement → completion gap:\n{stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Timestamps (cli spec: rendered lines are timestamped)
+// ---------------------------------------------------------------------------
+
+/// `true` for `HH:MM:SS` at the start of a (plain) line.
+fn starts_with_hhmmss(line: &str) -> bool {
+    let b = line.as_bytes();
+    b.len() >= 8
+        && b[0].is_ascii_digit()
+        && b[1].is_ascii_digit()
+        && b[2] == b':'
+        && b[3].is_ascii_digit()
+        && b[4].is_ascii_digit()
+        && b[5] == b':'
+        && b[6].is_ascii_digit()
+        && b[7].is_ascii_digit()
+}
+
+#[test]
+fn rendered_lines_carry_plain_timestamps_under_no_color() {
+    // cli spec "Rendered lines are timestamped" + "No-color keeps plain
+    // timestamps": every renderer line (chunk, tool, plan, usage,
+    // ponos.log) begins `HH:MM:SS [` with no ANSI anywhere; script print
+    // output is byte-identical.
+    let project = Project::new(
+        "ts-plain",
+        &[
+            ("MOCK_CHUNKS", "hello"),
+            ("MOCK_TOOL", "1"),
+            ("MOCK_PLAN", "1"),
+            ("MOCK_USAGE", "5,10,2,3"),
+        ],
+    );
+    let script = project.script(
+        r#"
+print("print-line")
+ponos.log("log-line")
+local s = ponos.agent("mock"):session()
+s:prompt("hi")
+s:close()
+"#,
+    );
+    let (code, stdout, _) = project.run(&script, &["--no-color"]);
+    assert_eq!(code, 0, "{stdout}");
+    let mut saw_print = false;
+    let mut saw_rendered = false;
+    for line in stdout.lines() {
+        if line == "print-line" {
+            saw_print = true; // "Script print output is untouched"
+            continue;
+        }
+        saw_rendered = true;
+        assert!(
+            starts_with_hhmmss(line) && line[8..].starts_with(" ["),
+            "line misses `HH:MM:SS [` prefix: {line:?}\n{stdout}"
+        );
+    }
+    assert!(saw_print, "print line missing:\n{stdout}");
+    assert!(saw_rendered, "no rendered lines found:\n{stdout}");
+    assert!(!stdout.contains('\x1b'), "no ANSI expected:\n{stdout}");
+}
+
+#[test]
+fn rendered_lines_carry_dimmed_timestamps_under_color() {
+    // Same contract with color on: the timestamp is dimmed (`\x1b[2m` …
+    // `\x1b[0m`) ahead of the `[label]` prefix.
+    let project = Project::new("ts-color", &[("MOCK_CHUNKS", "hello")]);
+    let stdout = run_prompt_script(&project, &[]);
+    let chunk_line = stdout
+        .lines()
+        .find(|l| l.ends_with("hello\x1b[0m"))
+        .unwrap_or_else(|| panic!("chunk line missing:\n{stdout}"));
+    assert!(
+        chunk_line.starts_with("\x1b[2m")
+            && starts_with_hhmmss(&chunk_line[4..])
+            && chunk_line[12..].starts_with("\x1b[0m ["),
+        "timestamp not dimmed-leading: {chunk_line:?}\n{stdout}"
     );
 }

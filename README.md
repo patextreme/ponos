@@ -58,6 +58,30 @@ Exit codes: `0` on success, `1` on an uncaught script error or a never-observed
 task error (printed to stderr), `2` on CLI/usage errors, and `n` when the script
 calls `ponos.exit(n)`.
 
+## Output format
+
+Streaming output is plain stdout, one line per event, each prefixed with a
+local wall-clock timestamp and the session attribution:
+
+```
+21:07:33 [claude/reviewer] tool: Search files "foo"
+21:07:36 [claude/reviewer] tool: Search files "foo" (completed, 3.2s)
+21:07:41 [claude/reviewer] Looks fine — two nits below.
+21:07:41 [ponos] log line from ponos.log
+```
+
+- Timestamps are always on (no flag): 24-hour `HH:MM:SS` local time, dimmed
+  under color, plain text with `--no-color`. `--quiet` suppresses rendered
+  output as before. Script `print` bypasses the renderer and is emitted
+  verbatim.
+- A tool call renders at most two lines: the tool's title when it enters
+  `in_progress`, and the title with status and wall-clock duration when it
+  settles — `tool: Search files "foo" (completed, 3.2s)` (`1m 05.0s` past the
+  minute). Update lines resolve the title announced by the `tool_call`; the
+  raw call id appears only when an update precedes its announcement.
+  `pending` announcements and repeated identical statuses render nothing, so
+  agents that resend the same status cannot flood the log.
+
 ## Agent registry
 
 Agents are configured in TOML. Project entries (`.ponos/config.toml`, found
@@ -332,7 +356,8 @@ ponos run examples/sequential_review.luau
 - `src/bin/mock-agent/` — a scriptable ACP agent (with an MCP client for
   suggested servers) used by the offline test suite (`MOCK_CHUNKS`,
   `MOCK_HANG`, `MOCK_PERMISSION` (`once`/`always`/`reject`), `MOCK_TOOL`,
-  `MOCK_PLAN`, `MOCK_USAGE`, `MOCK_STDERR`, `MOCK_DELAY_MS`, `MOCK_SUBMIT`,
+  `MOCK_TOOL_FLOW` (status-sequence replay), `MOCK_PLAN`, `MOCK_USAGE`,
+  `MOCK_STDERR`, `MOCK_DELAY_MS`, `MOCK_SUBMIT`,
   `MOCK_SUBMIT_BAD`, `MOCK_SUBMIT_ONCE`, `MOCK_NO_MCP`, `MOCK_ECHO_MCP`,
   `MOCK_MCP_LIST`, `MOCK_CONFIG_OPTIONS`, `MOCK_CONFIG_REJECT`,
   `MOCK_CONFIG_UPDATE`, `MOCK_CONFIG_ECHO`, …).

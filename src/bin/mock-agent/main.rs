@@ -10,6 +10,12 @@
 //!   emits a `usage_update` during the turn and carries
 //!   token usage on the prompt response
 //! - `MOCK_TOOL`        — emit a `tool_call` update (pending → completed)
+//! - `MOCK_TOOL_FLOW`   — comma-separated status sequence replayed for one
+//!   tool call: a titled `tool_call` for the first entry,
+//!   `tool_call_update`s for the rest (e.g.
+//!   `pending,in_progress,in_progress,completed`). Prefix an entry with
+//!   `!` to force it out as a bare update (an id that was never announced
+//!   — ponos's raw-id fallback). `MOCK_DELAY_MS` spaces the entries.
 //! - `MOCK_PLAN`        — emit a plan update
 //! - `MOCK_PERMISSION`  — send `session/request_permission`; `once`/`1`
 //!   offers only `AllowOnce`, `always` offers `AllowOnce` + `AllowAlways`
@@ -212,6 +218,17 @@ fn env_ms(name: &str) -> u64 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
+}
+
+/// Parse one `MOCK_TOOL_FLOW` status entry.
+fn tool_status_from_str(s: &str) -> ToolCallStatus {
+    match s {
+        "pending" => ToolCallStatus::Pending,
+        "in_progress" => ToolCallStatus::InProgress,
+        "completed" => ToolCallStatus::Completed,
+        "failed" => ToolCallStatus::Failed,
+        other => panic!("mock-agent: unknown MOCK_TOOL_FLOW status {other:?}"),
+    }
 }
 
 fn stop_reason_from_env() -> StopReason {
@@ -615,6 +632,43 @@ async fn run_prompt(
                 ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
             )),
         ))?;
+    }
+
+    // Arbitrary status replay for one tool call: a titled announcement
+    // for the first entry, updates for the rest — the fixture for ponos's
+    // tool-line transition/dedup policy. `!`-prefixed entries go out as
+    // bare updates even in first position (unannounced ids).
+    if let Some(seq) = std::env::var("MOCK_TOOL_FLOW")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        const FLOW_ID: &str = "tool-flow-1";
+        const FLOW_TITLE: &str = "Search files \"foo\"";
+        for (i, raw) in seq
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .enumerate()
+        {
+            let (bare, status) = match raw.strip_prefix('!') {
+                Some(rest) => (true, rest),
+                None => (false, raw),
+            };
+            let status = tool_status_from_str(status);
+            let update = if i == 0 && !bare {
+                SessionUpdate::ToolCall(ToolCall::new(FLOW_ID, FLOW_TITLE).status(status))
+            } else {
+                SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    FLOW_ID,
+                    ToolCallUpdateFields::new().status(status),
+                ))
+            };
+            cx.send_notification(SessionNotification::new(session_id.clone(), update))?;
+            tokio::time::sleep(delay).await;
+            if turn.cancelled.load(Ordering::SeqCst) {
+                return respond_cancelled(responder);
+            }
+        }
     }
 
     if env_flag("MOCK_PLAN") {

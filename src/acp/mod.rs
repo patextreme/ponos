@@ -21,9 +21,10 @@
 //! submissions land in the in-flight turn's slot and ride out on
 //! `TurnOutcome::result`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
@@ -174,6 +175,10 @@ struct TurnFold {
     in_flight: bool,
     /// The turn's last accepted typed submission (last-wins).
     result: Option<serde_json::Value>,
+    /// Per-session tool call display state. Deliberately outside
+    /// `begin_turn`/`settle_turn`: entries live for the session lifetime
+    /// so a repeat terminal status for an old id still dedups.
+    tools: ToolFold,
 }
 
 impl TurnFold {
@@ -210,6 +215,117 @@ fn submission_sink(fold: Arc<Mutex<TurnFold>>) -> SubmissionSink {
             false
         }
     })
+}
+
+/// Display state for one tool call (keyed by call id).
+#[derive(Default)]
+struct ToolCallDisplay {
+    /// Title learned from the call's `tool_call` announcement; `None`
+    /// until one arrives — updates for ids that were never announced fall
+    /// back to the raw call id.
+    title: Option<String>,
+    /// Duration anchor: the `in_progress` transition once one has
+    /// rendered, otherwise the call's first observation.
+    first_activity: Option<Instant>,
+    /// Last status a line was rendered for; a transition that repeats it
+    /// renders nothing.
+    last_rendered: Option<String>,
+}
+
+/// Tool-line policy for one session: which tool updates deserve a line.
+/// Kept here (where the update stream arrives) rather than in the
+/// renderer, which stays a dumb sink.
+#[derive(Default)]
+struct ToolFold {
+    calls: HashMap<String, ToolCallDisplay>,
+}
+
+impl ToolFold {
+    /// Fold a `tool_call` announcement. `pending` seeds the map only; an
+    /// announcement already `in_progress` renders the start line; an
+    /// announcement already terminal renders the terminal line, duration
+    /// measured from first observation.
+    fn announce(&mut self, id: &str, title: &str, status: &str, now: Instant) -> Option<String> {
+        match self.calls.get_mut(id) {
+            Some(entry) => entry.title = Some(title.to_string()),
+            None => {
+                self.calls.insert(
+                    id.to_string(),
+                    ToolCallDisplay {
+                        title: Some(title.to_string()),
+                        first_activity: Some(now),
+                        last_rendered: None,
+                    },
+                );
+            }
+        }
+        self.transition(id, status, now)
+    }
+
+    /// Fold a `tool_call_update` carrying a status. An id that was never
+    /// announced is seeded titleless (raw-id fallback for its lines).
+    fn update_status(&mut self, id: &str, status: &str, now: Instant) -> Option<String> {
+        self.calls
+            .entry(id.to_string())
+            .or_insert_with(|| ToolCallDisplay {
+                first_activity: Some(now),
+                ..ToolCallDisplay::default()
+            });
+        self.transition(id, status, now)
+    }
+
+    /// Apply the render policy to one observed status and return the
+    /// fully formatted line body when a line should render.
+    ///
+    /// - `pending` (and unknown statuses) never render;
+    /// - `in_progress` renders the bare-title start line once — repeats
+    ///   are silent (the flood guard);
+    /// - terminal statuses render title + status + duration, once.
+    fn transition(&mut self, id: &str, status: &str, now: Instant) -> Option<String> {
+        let entry = self.calls.get_mut(id).expect("entry just seeded");
+        // Title via the id→title map; the raw call id is the fallback for
+        // updates that preceded their announcement.
+        let title = entry.title.clone().unwrap_or_else(|| id.to_string());
+        match status {
+            "in_progress" => {
+                if entry.last_rendered.as_deref() == Some(status) {
+                    return None;
+                }
+                entry.last_rendered = Some(status.to_string());
+                // The start line is the duration anchor once it exists.
+                entry.first_activity = Some(now);
+                Some(format!("tool: {title}"))
+            }
+            "completed" | "failed" => {
+                if entry.last_rendered.as_deref() == Some(status) {
+                    return None;
+                }
+                entry.last_rendered = Some(status.to_string());
+                let anchor = entry.first_activity.unwrap_or(now);
+                Some(format!(
+                    "tool: {title} ({status}, {})",
+                    format_duration(now - anchor)
+                ))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `X.Ys` under a minute, `Mm SS.Ss` above. Tenths are rounded up-front so
+/// the seconds part can never display `60.0`.
+fn format_duration(d: Duration) -> String {
+    let tenths = (d.as_millis() + 50) / 100;
+    if tenths < 600 {
+        format!("{}.{}s", tenths / 10, tenths % 10)
+    } else {
+        format!(
+            "{}m {:02}.{}s",
+            tenths / 600,
+            (tenths % 600) / 10,
+            tenths % 10
+        )
+    }
 }
 
 /// A handle from the scripting side to one live agent session.
@@ -795,23 +911,26 @@ fn fold_update(
         }
         SessionUpdate::AgentMessageChunk(_) => {}
         SessionUpdate::ToolCall(call) => {
-            renderer.event(
-                label,
-                DisplayEvent::Tool {
-                    title: call.title,
-                    status: status_string(&call.status),
-                },
+            let body = fold.lock().unwrap().tools.announce(
+                &call.tool_call_id.0,
+                &call.title,
+                &status_string(&call.status),
+                Instant::now(),
             );
+            if let Some(body) = body {
+                renderer.event(label, DisplayEvent::Tool(body));
+            }
         }
         SessionUpdate::ToolCallUpdate(update) => {
             if let Some(status) = update.fields.status {
-                renderer.event(
-                    label,
-                    DisplayEvent::Tool {
-                        title: update.tool_call_id.0.to_string(),
-                        status: status_string(&status),
-                    },
+                let body = fold.lock().unwrap().tools.update_status(
+                    &update.tool_call_id.0,
+                    &status_string(&status),
+                    Instant::now(),
                 );
+                if let Some(body) = body {
+                    renderer.event(label, DisplayEvent::Tool(body));
+                }
             }
         }
         SessionUpdate::Plan(plan) => {
@@ -1113,5 +1232,122 @@ mod tests {
         fold.result = Some(serde_json::json!({"n": 3}));
         assert_eq!(fold.settle_turn(true), None);
         assert!(!fold.in_flight && fold.result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool-line fold policy
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn tool_fold_pending_seeds_only() {
+        let mut tools = ToolFold::default();
+        let t0 = Instant::now();
+        assert_eq!(
+            tools.announce("c1", "Search files \"foo\"", "pending", t0),
+            None
+        );
+        let entry = tools.calls.get("c1").expect("pending seeds the map");
+        assert_eq!(entry.title.as_deref(), Some("Search files \"foo\""));
+        assert!(
+            entry.first_activity.is_some(),
+            "first observation anchors duration"
+        );
+        assert!(entry.last_rendered.is_none(), "nothing rendered yet");
+    }
+
+    #[test]
+    fn tool_fold_start_then_terminal_with_duration() {
+        let mut tools = ToolFold::default();
+        let t0 = Instant::now();
+        assert_eq!(tools.announce("c1", "T", "pending", t0), None);
+        // Start line at the in_progress transition: bare title, no status.
+        assert_eq!(
+            tools.update_status("c1", "in_progress", t0 + Duration::from_millis(100)),
+            Some("tool: T".to_string())
+        );
+        // Terminal line: status + duration measured from the start line.
+        assert_eq!(
+            tools.update_status("c1", "completed", t0 + Duration::from_millis(3300)),
+            Some("tool: T (completed, 3.2s)".to_string())
+        );
+    }
+
+    #[test]
+    fn tool_fold_repeated_statuses_are_suppressed() {
+        let mut tools = ToolFold::default();
+        let t0 = Instant::now();
+        tools.announce("c1", "T", "in_progress", t0);
+        // Repeated in_progress (resent by flood-prone agents).
+        assert_eq!(
+            tools.update_status("c1", "in_progress", t0 + Duration::from_millis(50)),
+            None
+        );
+        // Repeated terminal status.
+        tools.update_status("c1", "completed", t0 + Duration::from_millis(100));
+        assert_eq!(
+            tools.update_status("c1", "completed", t0 + Duration::from_millis(150)),
+            None
+        );
+    }
+
+    #[test]
+    fn tool_fold_announcement_already_in_progress_or_terminal() {
+        let mut tools = ToolFold::default();
+        let t0 = Instant::now();
+        assert_eq!(
+            tools.announce("c1", "T", "in_progress", t0),
+            Some("tool: T".to_string())
+        );
+        assert_eq!(
+            tools.announce("c2", "U", "completed", t0 + Duration::from_millis(250)),
+            Some("tool: U (completed, 0.0s)".to_string())
+        );
+    }
+
+    #[test]
+    fn tool_fold_unannounced_update_falls_back_to_raw_id() {
+        let mut tools = ToolFold::default();
+        let t0 = Instant::now();
+        assert_eq!(
+            tools.update_status("call_0bb9", "in_progress", t0),
+            Some("tool: call_0bb9".to_string())
+        );
+        assert_eq!(
+            tools.update_status("call_0bb9", "failed", t0 + Duration::from_millis(200)),
+            Some("tool: call_0bb9 (failed, 0.2s)".to_string())
+        );
+        // A late announcement still teaches the map the real title.
+        assert_eq!(
+            tools.announce(
+                "call_0bb9",
+                "Real title",
+                "completed",
+                t0 + Duration::from_millis(400)
+            ),
+            Some("tool: Real title (completed, 0.4s)".to_string())
+        );
+    }
+
+    #[test]
+    fn tool_fold_direct_completion_measures_from_first_observation() {
+        let mut tools = ToolFold::default();
+        let t0 = Instant::now();
+        tools.announce("c1", "T", "pending", t0);
+        assert_eq!(
+            tools.update_status("c1", "completed", t0 + Duration::from_millis(1200)),
+            Some("tool: T (completed, 1.2s)".to_string())
+        );
+    }
+
+    #[test]
+    fn duration_format_shapes() {
+        assert_eq!(format_duration(Duration::from_millis(0)), "0.0s");
+        assert_eq!(format_duration(Duration::from_millis(49)), "0.0s");
+        assert_eq!(format_duration(Duration::from_millis(50)), "0.1s");
+        assert_eq!(format_duration(Duration::from_millis(3149)), "3.1s");
+        assert_eq!(format_duration(Duration::from_millis(59_949)), "59.9s");
+        // The minute boundary and rounding across it.
+        assert_eq!(format_duration(Duration::from_millis(59_950)), "1m 00.0s");
+        assert_eq!(format_duration(Duration::from_millis(125_040)), "2m 05.0s");
     }
 }

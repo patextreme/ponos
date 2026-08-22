@@ -9,6 +9,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod common;
+
 fn ponos_bin() -> &'static str {
     env!("CARGO_BIN_EXE_ponos")
 }
@@ -46,11 +48,16 @@ fn mock_agent(env: &[(&str, &str)]) -> String {
 }
 
 /// Run a script through the real binary; returns (stdout, stderr, success).
+/// `--no-color` keeps captured output plain (timestamps are stripped by
+/// the assertions that target whole lines).
 fn run_script(dir: &Path, body: &str, verbose: bool) -> (String, String, bool) {
     let script = dir.join("main.luau");
     std::fs::write(&script, body).unwrap();
     let mut cmd = Command::new(ponos_bin());
-    cmd.arg("run").arg(&script).current_dir(dir);
+    cmd.arg("run")
+        .arg(&script)
+        .current_dir(dir)
+        .arg("--no-color");
     if verbose {
         cmd.arg("--verbose");
     }
@@ -492,6 +499,7 @@ s:close()
     assert!(ok, "{stdout}");
     let json_line = stdout
         .lines()
+        .map(common::strip_timestamp)
         .find(|l| l.starts_with("[ponos] ["))
         .expect("mcpServers JSON in output");
     let servers: serde_json::Value =
@@ -545,6 +553,7 @@ s:close()
     assert!(ok, "stdout:\n{stdout}\nstderr:\n{stderr}");
     let json_line = stdout
         .lines()
+        .map(common::strip_timestamp)
         .find(|l| l.starts_with("[ponos] ["))
         .expect("tool listing JSON in output");
     let listing: serde_json::Value =

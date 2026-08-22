@@ -1539,6 +1539,7 @@ dependencies = [
  "async-process",
  "clap",
  "futures",
+ "jiff",
  "jsonschema",
  "libc",
  "mlua",

@@ -36,6 +36,10 @@ rmcp = { version = "3", features = ["client", "transport-io", "transport-child-p
 # resolve-http/resolve-file would reintroduce network/file access — remote
 # $refs must fail at compile time so runs stay offline.
 jsonschema = { version = "0.50", default-features = false }
+# Local wall-clock HH:MM:SS for rendered log lines. Default features off:
+# no bundled IANA tzdb (tz-system reads the system zone via
+# /etc/localtime / TZ), pure Rust, wrapped behind one helper.
+jiff = { version = "0.2", default-features = false, features = ["tz-system"] }
 
 [dev-dependencies]
 tempfile = "3"

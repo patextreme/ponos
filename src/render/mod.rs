@@ -20,6 +20,15 @@ const PALETTE: [&str; 6] = [
 ];
 
 const RESET: &str = "\x1b[0m";
+const DIM: &str = "\x1b[2m";
+
+/// Local wall-clock time as 24-hour `HH:MM:SS`, prefixed to every
+/// rendered line. Taken at write time: the producers of display events
+/// have no event time distinct from render time.
+fn hhmmss() -> String {
+    let now = jiff::Zoned::now();
+    format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second())
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RenderOptions {
@@ -48,8 +57,11 @@ impl RenderOptions {
 pub enum DisplayEvent {
     /// A chunk of the agent's message text (streamed).
     Chunk(String),
-    /// One-line tool summary.
-    Tool { title: String, status: String },
+    /// One rendered tool line: the fully formatted body (`tool: <title>`
+    /// at the call's start, `tool: <title> (<status>, <duration>)` when it
+    /// settles). Transition policy and duration are decided where the
+    /// update stream is folded; the renderer is a dumb sink.
+    Tool(String),
     /// Compact plan status list.
     Plan(String),
     /// Context-window usage line.
@@ -108,11 +120,23 @@ impl Renderer {
     }
 
     fn prefixed_line(&self, inner: &mut Inner, label: &str, line: &str) {
+        let ts = hhmmss();
         if self.opts.no_color {
-            let _ = writeln!(inner.out, "[{label}] {line}");
+            let _ = writeln!(inner.out, "{ts} [{label}] {line}");
         } else {
             let style = self.style_for(inner, label);
-            let _ = writeln!(inner.out, "[{label}]{style} {line}{RESET}");
+            let _ = writeln!(inner.out, "{DIM}{ts}{RESET} [{label}]{style} {line}{RESET}");
+        }
+    }
+
+    /// `[ponos]` diagnostic line (lifecycle, script log): timestamped but
+    /// never label-colored.
+    fn ponos_line(&self, inner: &mut Inner, msg: &str) {
+        let ts = hhmmss();
+        if self.opts.no_color {
+            let _ = writeln!(inner.out, "{ts} [ponos] {msg}");
+        } else {
+            let _ = writeln!(inner.out, "{DIM}{ts}{RESET} [ponos] {msg}");
         }
     }
 
@@ -157,9 +181,7 @@ impl Renderer {
     pub fn event(&self, label: &str, event: DisplayEvent) {
         match event {
             DisplayEvent::Chunk(text) => self.chunk(label, &text, false),
-            DisplayEvent::Tool { title, status } => {
-                self.line(label, &format!("tool: {title} ({status})"))
-            }
+            DisplayEvent::Tool(body) => self.line(label, &body),
             DisplayEvent::Plan(summary) => self.line(label, &summary),
             DisplayEvent::Usage { used, size } => {
                 self.line(label, &format!("context: {used}/{size} tokens"))
@@ -183,7 +205,7 @@ impl Renderer {
             return;
         }
         let mut inner = self.inner.lock().unwrap();
-        let _ = writeln!(inner.out, "[ponos] {msg}");
+        self.ponos_line(&mut inner, msg);
         let _ = inner.out.flush();
     }
 
@@ -191,7 +213,7 @@ impl Renderer {
     /// `--quiet`, which only silences streaming render/diagnostics).
     pub fn script_log(&self, msg: &str) {
         let mut inner = self.inner.lock().unwrap();
-        let _ = writeln!(inner.out, "[ponos] {msg}");
+        self.ponos_line(&mut inner, msg);
         let _ = inner.out.flush();
     }
 
