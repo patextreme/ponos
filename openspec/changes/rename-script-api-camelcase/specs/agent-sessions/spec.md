@@ -14,3 +14,10 @@ During a prompt turn ponos SHALL receive `session/update` notifications and: acc
 #### Scenario: Context-window usage rendered
 - **WHEN** an agent emits a `usage_update` during a turn
 - **THEN** the reported context-window usage is rendered with session attribution
+
+### Requirement: Cancellation maps to session/cancel
+Calling `session:cancel()` during an in-flight turn SHALL send the `session/cancel` notification to that session's agent, and `timeoutMs` expiry on `prompt` SHALL do the same before raising the timeout error.
+
+#### Scenario: Timeout cancels remotely
+- **WHEN** a prompt exceeds `timeoutMs`
+- **THEN** ponos sends `session/cancel` and raises the timeout error to the script

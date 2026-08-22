@@ -21,7 +21,7 @@ None.
 ### Modified Capabilities
 
 - `scripting`: prompt result table and option-table field names change (`stop_reason` → `stopReason`, `cache_read`/`cache_write` → `cacheRead`/`cacheWrite`, `timeout_ms` → `timeoutMs`, `mcp_servers` → `mcpServers`), on top of the `result` additions from `add-typed-agent-results`.
-- `agent-sessions`: the "Prompt turns drive the full update stream" requirement's field mention changes.
+- `agent-sessions`: the "Prompt turns drive the full update stream" requirement's field mention changes, and "Cancellation maps to session/cancel" renames its `timeoutMs` mentions.
 - `type-definitions`: the definitions file declares the renamed fields; the probe exercises them.
 - `typed-results` (introduced by `add-typed-agent-results`, in progress): field mentions in three requirements' scenarios change to camelCase.
 
