@@ -1,11 +1,11 @@
 {
   inputs,
-  lib,
   ...
 }: {
   # Offline test suite: the integration tests drive the in-repo mock agent
-  # only (no network). The source includes the Luau examples so the
-  # example tests can run them from the sandbox.
+  # only (no network). The source is the shared config.ponosSrc so the
+  # examples and fixtures the tests run are the same tree the package is
+  # built from.
   perSystem = {
     config,
     pkgs,
@@ -19,30 +19,51 @@
       CARGO_BUILD_RUSTFLAGS = "-C debuginfo=0";
     };
 
+    # Same derivation as in package.nix (keep the arguments
+    # byte-identical): dependencies build once and are shared between
+    # the release package and the test suite.
     cargoArtifacts = craneLib.buildDepsOnly (commonArgs
       // {
         src = craneLib.cleanCargoSource ../.;
       });
-
-    testSrc = pkgs.lib.cleanSourceWith {
-      src = ../.;
-      filter = path: type:
-        !(pkgs.lib.elem (baseNameOf path) [
-          ".git"
-          "target"
-          ".work"
-          ".pi"
-          "openspec"
-          "result"
-          ".direnv"
-        ]);
-    };
   in {
     checks.ponos-tests = craneLib.cargoTest (commonArgs
       // {
-        src = testSrc;
+        src = config.ponosSrc;
         inherit cargoArtifacts;
       });
+
+    # `nix flake check` evaluates packages but does not build them, so a
+    # broken release build only surfaced on `nix build`/`nix run`. This
+    # check closes that gap: it builds the actual flake package and
+    # drives the same binary `nix run` would start — CLI entry points,
+    # the compile-time-embedded type definitions, and one bundled
+    # example round-tripped through the in-repo mock agent (mirrors
+    # tests/examples.rs; fully offline).
+    checks.ponos-smoke = pkgs.runCommand "ponos-smoke" {
+      nativeBuildInputs = [config.packages.ponos];
+    } ''
+      set -e
+      ponos --version
+      ponos --help > /dev/null
+
+      # The embedded definitions (include_str! of types/ponos.d.luau in
+      # src/cli.rs) must actually be in the release binary.
+      ponos types | head -n1 | grep -q "type definitions"
+
+      # End-to-end: run a bundled example against the mock agent with a
+      # generated project registry, exactly like tests/examples.rs.
+      work=$(mktemp -d)
+      mkdir -p "$work/.ponos"
+      cat > "$work/.ponos/config.toml" <<EOF
+      [agents.demo]
+      command = "${config.packages.ponos}/bin/mock-agent"
+      args = []
+      EOF
+      (cd "$work" && ponos run "${config.ponosSrc}/examples/fanout.luau") > /dev/null
+
+      touch $out
+    '';
 
     # Static-analysis gate for the Luau surface: every bundled script
     # (examples, type-definition probe fixture) must pass luau-lsp in
@@ -52,7 +73,7 @@
     checks.ponos-analyze = pkgs.stdenv.mkDerivation {
       pname = "ponos-analyze";
       version = commonArgs.version;
-      src = testSrc;
+      src = config.ponosSrc;
 
       nativeBuildInputs = [pkgs.luau-lsp];
 

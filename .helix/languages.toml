@@ -1,0 +1,23 @@
+# Project-local Helix config: point luau-lsp at the in-repo type
+# definitions so `ponos.*` globals, the sandboxed stdlib, and the
+# `--!strict` examples type-check in the editor (same definitions the
+# `ponos-analyze` flake check enforces).
+#
+# Note the server registered for the `luau` language is named `luau`
+# (Helix default: command `luau-lsp`, arg `lsp`) — keep that arg when
+# overriding. `--definitions` is relative to the LSP root, which
+# resolves to this repo root. The platform is an LSP *setting* (not a
+# CLI flag of the `lsp` subcommand): luau-lsp queries it via the
+# workspace/configuration request, and Helix answers from the
+# `config` table below (section `luau-lsp`), so it must live here
+# rather than in a --settings file. "standard" platform, not Roblox —
+# no sourcemap or game globals leaking into ponos scripts.
+[language-server.luau]
+command = "luau-lsp"
+args = [
+  "lsp",
+  "--definitions=types/ponos.d.luau",
+]
+
+[language-server.luau.config.luau-lsp.platform]
+type = "standard"

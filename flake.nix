@@ -22,6 +22,7 @@
     flake-parts.lib.mkFlake {inherit inputs;} {
       imports = [
         ./nix/toolchain.nix
+        ./nix/source.nix
         ./nix/package.nix
         ./nix/devshell.nix
         ./nix/apps.nix
