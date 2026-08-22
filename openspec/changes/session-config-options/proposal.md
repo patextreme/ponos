@@ -4,7 +4,7 @@ ACP agents increasingly expose per-session configuration — most importantly mo
 
 ## What Changes
 
-- Advertise the `session.configOptions` client capability in `initialize` (the only client capability ponos declares; interactive capabilities remain unadvertised and requests still get deny-all -32601).
+- Advertise the `session.configOptions` client capability (with its `boolean` sub-capability) in `initialize` (the only client capability ponos declares; interactive capabilities remain unadvertised and requests still get deny-all -32601).
 - Capture `configOptions` from the `session/new` response and keep the live option state per session; fold `config_option_update` notifications and `set_config_option` responses into it.
 - New session API: `session:configOptions()` returns the live option list (empty table when the agent offers none); `session:setConfig(id, value)` sets a string (select value id) or boolean option, hard-erroring on agent rejection or unsupported method.
 - `setConfig` is serialized with prompt turns via the existing turn lock: config changes apply strictly between turns.

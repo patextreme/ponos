@@ -4,7 +4,7 @@
 
 ## 2. ACP driver
 
-- [ ] 2.1 Advertise the capability: set `clientCapabilities.session.configOptions` on the `InitializeRequest` in `src/acp/mod.rs`. Extend `SessionOptions`/`SessionHandle` plumbing as needed for per-session option state (`Arc<Mutex<Vec<SessionConfigOption>>>`, patterned on `TurnFold`). Verify: `cargo build`; handshake test asserts the capability bit reaches the wire (mock agent logs or echoes it).
+- [ ] 2.1 Advertise the capability: set `clientCapabilities.session.configOptions` on the `InitializeRequest` in `src/acp/mod.rs`, including the `boolean` sub-capability (`SessionConfigOptionsCapabilities::new().boolean(BooleanConfigOptionCapabilities::new())`). Extend `SessionOptions`/`SessionHandle` plumbing as needed for per-session option state (`Arc<Mutex<Vec<SessionConfigOption>>>`, patterned on `TurnFold`). Verify: `cargo build`; handshake test asserts the capability bit reaches the wire (mock agent logs or echoes it).
 - [ ] 2.2 Capture `config_options` from the `session/new` response into the session's option state. Verify: unit/integration test creating a session against mock with `MOCK_CONFIG_OPTIONS` set; state snapshot non-empty.
 - [ ] 2.3 Handle `config_option_update`: add a `SessionUpdate::ConfigOptionUpdate` match arm to the existing `session/update` handler that replaces the option state wholesale and emits a lifecycle line naming each changed option id and its new value. Verify: `cargo test --test acp` with `MOCK_CONFIG_UPDATE`.
 
