@@ -2,6 +2,7 @@
 
 pub mod acp;
 pub mod bridge;
+pub mod check;
 pub mod cli;
 pub mod config;
 pub mod render;

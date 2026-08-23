@@ -43,6 +43,7 @@ cargo test             # full suite; integration tests use the mock agent only
 
 ```
 ponos run <script.luau> [--quiet] [--verbose] [-vv] [--no-color]
+ponos check <script.luau> [--no-color]
 ponos types
 ponos --version
 ```
@@ -56,7 +57,8 @@ ponos --version
 
 Exit codes: `0` on success, `1` on an uncaught script error or a never-observed
 task error (printed to stderr), `2` on CLI/usage errors, and `n` when the script
-calls `ponos.exit(n)`.
+calls `ponos.exit(n)`. For `ponos check`, `1` means findings and `2` also covers
+"check could not run" (see [Checking scripts](#checking-scripts)).
 
 ## Output format
 
@@ -280,6 +282,49 @@ for. The [model-fanout example](examples/model-fanout.luau) shows the
 full pattern; successful sets and agent-pushed changes each render one
 lifecycle line (`--verbose`).
 
+## Checking scripts
+
+`ponos check` verifies a script **without executing it** — no top-level
+code runs, no required module loads, no agent subprocess spawns:
+
+```sh
+ponos check my_script.luau
+```
+
+Three passes run, findings are collected together (never fail-fast), and
+each in-process finding prints to stderr as `path:line:col: message`
+followed by a summary line (`--no-color` drops the ANSI coloring):
+
+1. **Compile** — the entry compiles under the same Luau compiler `run`
+   uses (compiled, never called). Syntax errors surface here with a
+   line number; module-level syntax errors surface in the next pass.
+2. **Static lints** — a full-moon AST walk over the entry and every file
+   reachable through literal `require("...")` string arguments:
+   unknown literal `ponos.agent("name")` names against the discovered
+   registry; literal require targets that don't resolve under ponos's
+   rules (`.luau`/`.lua`/`init.luau`, script-tree escape guard); and a
+   missing leading `--!strict` directive in the entry or any reachable
+   file. Computed require paths, computed agent names, and inline agent
+   spec tables are not linted — only literal strings.
+3. **Typecheck** — `luau-lsp analyze` (found on `PATH`) runs against the
+   installed binary's embedded definitions; its diagnostics pass through
+   verbatim. luau-lsp must be installed (`nix develop` ships it; see
+   [luau-lsp](https://github.com/luau-lsp/luau-lsp)) — a missing binary
+   is a hard error, not a silent skip.
+
+Exit codes: `0` all passes clean · `1` findings (including luau-lsp
+errors; warnings like `LocalUnused` don't fail) · `2` the check could not
+run (missing/unreadable script, registry discovery failure, luau-lsp
+absent).
+
+`ponos run` also pre-flights every script in-process (compile + literal
+require + literal agent-name lints — no strictness enforcement, no
+luau-lsp) and fails the run with exit 1 before the first agent spawns.
+Scripts using computed require paths or agent names run exactly as
+before. Known trade-off: a literal require on a code path that never
+executes at runtime still fails the pre-flight — delete the dead
+require.
+
 ## Editor setup
 
 Scripts get completion, hover, and type checking — plus sandbox violations
@@ -337,7 +382,9 @@ Known residuals of the definitions (none affect execution):
   by current luau-lsp (a table-literal excess-key limitation) — invented
   *outcome* fields (`r.txt`) are flagged, double-check option names by hand;
 - the require-tree restriction (no paths escaping the script directory) is
-  enforced at runtime only.
+  not enforced by editor analysis (luau-lsp resolves requires without
+  ponos's escape-guard); the runtime enforces it at require time and
+  `ponos check` enforces it statically before any run.
 
 ## Examples
 

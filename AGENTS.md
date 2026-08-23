@@ -35,7 +35,9 @@ the same pin. Don't update the pin casually.
 ## Architecture
 
 - `src/cli.rs` — clap CLI. Exit codes are a contract: `0` success, `1` script
-  error or never-observed task error, `2` usage, `n` via `ponos.exit(n)`.
+  error, never-observed task error, or (for `check`/`run` pre-flight) findings,
+  `2` usage — and for `ponos check` also "check could not run" (missing
+  script, registry discovery failure, luau-lsp absent) — `n` via `ponos.exit(n)`.
 - `src/config.rs` — TOML agent registry. Project `.ponos/config.toml` (found
   upward from the invocation dir) overrides `~/.config/ponos/config.toml`
   **per agent name**; `${VAR}` interpolates from ponos's env at resolve time.
@@ -51,6 +53,10 @@ the same pin. Don't update the pin casually.
   gets method-not-found so turns never hang. Per-session config option
   state lives in the driver (captured at `session/new`, folded from
   agent pushes and `setConfig`), serialized with turns via the turn lock.
+- `src/check*` — `ponos check` pipeline (compile pass via mlua, full-moon
+  static lints over the literal require graph, luau-lsp analyze with the
+  embedded definitions) and the `run` pre-flight. Zero-execution: nothing
+  here may call a compiled chunk.
 - `src/task.rs` — `ponos.spawn`/`join`/`map` concurrency primitives.
 - `src/render/` — streaming output renderer (color/quiet/verbose modes).
 

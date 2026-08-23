@@ -37,6 +37,15 @@ enum Command {
         no_color: bool,
     },
 
+    /// Verify a script without executing it.
+    Check {
+        /// Path to the entry Luau script.
+        script: PathBuf,
+        /// Disable ANSI coloring of findings.
+        #[arg(long)]
+        no_color: bool,
+    },
+
     /// Print the Luau type definitions for the ponos script API.
     Types,
 
@@ -49,8 +58,9 @@ enum Command {
 
 /// Luau type definitions for the `ponos` script API. Single source of
 /// truth: `types/ponos.d.luau`, embedded at compile time so the emitted
-/// definitions always match the installed binary.
-const TYPE_DEFINITIONS: &str = include_str!("../types/ponos.d.luau");
+/// definitions always match the installed binary. Also feeds `ponos
+/// check`'s luau-lsp pass.
+pub(crate) const TYPE_DEFINITIONS: &str = include_str!("../types/ponos.d.luau");
 
 /// What `Cli::try_parse_from` produced: dispatch early on subcommands that
 /// need no runtime setup.
@@ -64,6 +74,8 @@ enum Parsed {
     },
     /// `ponos types` — print definitions, exit 0, touch nothing else.
     Types,
+    /// `ponos check` — verify a script without executing it.
+    Check { script: PathBuf, no_color: bool },
     /// `ponos __bridge` — typed-results MCP server over stdio.
     Bridge,
 }
@@ -88,6 +100,7 @@ fn parse(args: &[String]) -> Result<Parsed, clap::Error> {
             verbose,
         },
         Command::Types => Parsed::Types,
+        Command::Check { script, no_color } => Parsed::Check { script, no_color },
         Command::Bridge => Parsed::Bridge,
     })
 }
@@ -101,6 +114,31 @@ fn print_types() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `ponos check`: compile + static lints in-process, then the luau-lsp
+/// typecheck pass with the embedded definitions. Exit `0` clean, `1`
+/// findings, `2` the check could not run (missing script, registry
+/// discovery failure, luau-lsp missing).
+fn run_check(script: PathBuf, no_color: bool) -> ExitCode {
+    if !script.is_file() {
+        eprintln!("error: script not found: {}", script.display());
+        return ExitCode::from(2);
+    }
+    let invocation_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let registry = match Registry::discover(&invocation_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let code = crate::check::check(&crate::check::CheckConfig {
+        script_path: script,
+        registry,
+        color: !no_color,
+    });
+    ExitCode::from(code)
+}
+
 /// Entry point: returns the process exit code.
 pub fn main() -> ExitCode {
     let mut args: Vec<String> = vec!["ponos".to_string()];
@@ -112,6 +150,7 @@ pub fn main() -> ExitCode {
             verbose,
         }) => (script, render, verbose),
         Ok(Parsed::Types) => return print_types(),
+        Ok(Parsed::Check { script, no_color }) => return run_check(script, no_color),
         Ok(Parsed::Bridge) => return crate::bridge::run(),
         Err(e) => {
             // --help / --version are "errors" that carry their own output
@@ -157,6 +196,19 @@ pub fn main() -> ExitCode {
         }
     };
 
+    // Pre-flight: fail certainly-broken scripts (uncompilable entry or
+    // reachable module, unresolvable literal require, unknown literal
+    // agent name) before anything spawns. Computed forms are not
+    // linted; strictness is not enforced here (`ponos check` does that).
+    let preflight = crate::check::preflight(&script, &registry);
+    if !preflight.is_empty() {
+        for finding in &preflight {
+            eprintln!("{}", finding.render(!render_opts.no_color));
+        }
+        eprintln!("{}", crate::check::summary_line(&preflight));
+        return ExitCode::from(1);
+    }
+
     let renderer = std::sync::Arc::new(Renderer::new(render_opts));
     let config = RunConfig {
         script_path: script,
@@ -196,13 +248,37 @@ mod tests {
     fn types_subcommand_parses_without_run_arguments() {
         match parse(&args(&["types"])).unwrap() {
             Parsed::Types => {}
-            Parsed::Run { .. } | Parsed::Bridge => panic!("expected Types"),
+            Parsed::Run { .. } | Parsed::Check { .. } | Parsed::Bridge => panic!("expected Types"),
         }
     }
 
     #[test]
     fn missing_script_argument_is_a_usage_error() {
         let err = parse(&args(&["run"])).unwrap_err();
+        assert!(!matches!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayVersion | clap::error::ErrorKind::DisplayHelp
+        ));
+    }
+
+    #[test]
+    fn check_subcommand_parses() {
+        match parse(&args(&["check", "s.luau"])).unwrap() {
+            Parsed::Check { script, no_color } => {
+                assert_eq!(script, PathBuf::from("s.luau"));
+                assert!(!no_color);
+            }
+            _ => panic!("expected Check"),
+        }
+        match parse(&args(&["check", "s.luau", "--no-color"])).unwrap() {
+            Parsed::Check { no_color: true, .. } => {}
+            _ => panic!("expected Check"),
+        }
+    }
+
+    #[test]
+    fn check_without_script_is_a_usage_error() {
+        let err = parse(&args(&["check"])).unwrap_err();
         assert!(!matches!(
             err.kind(),
             clap::error::ErrorKind::DisplayVersion | clap::error::ErrorKind::DisplayHelp
