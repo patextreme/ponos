@@ -1,0 +1,112 @@
+# Script Checking Specification
+
+## Purpose
+
+Defines the `ponos check` subcommand: no-execution verification of a script through an in-process compile pass, static lints over the literal require graph, and a luau-lsp typecheck pass, plus the findings-reporting format and exit-code contract.
+
+## ADDED Requirements
+
+### Requirement: Check subcommand verifies a script without execution
+The CLI SHALL provide `ponos check <script.luau>` taking exactly one positional path to the entry Luau script. Checking SHALL NOT execute any script code: the entry chunk is compiled but never called, no required module runs, no agent subprocess is launched, and no renderer output is produced.
+
+#### Scenario: Clean script
+- **WHEN** `ponos check script.luau` is invoked on a script that passes all passes
+- **THEN** the process exits with code 0
+
+#### Scenario: No execution side effects
+- **WHEN** a checked script's top level contains calls that would spawn agents, prompt, or print
+- **THEN** checking launches no agent subprocess and produces no script output
+
+#### Scenario: Missing script argument
+- **WHEN** `ponos check` is invoked without a positional path
+- **THEN** the CLI prints a usage error and exits 2
+
+### Requirement: Compile pass detects syntax errors in-process
+The check SHALL compile the entry script in-process; a compilation failure is reported as a finding with file, line, and column.
+
+#### Scenario: Syntax error in the entry
+- **WHEN** the entry script contains a syntax error (e.g. unbalanced `end`)
+- **THEN** the finding is reported as `path:line:col: message` and the check exits 1
+
+#### Scenario: Entry compiles
+- **WHEN** the entry script compiles cleanly
+- **THEN** checking proceeds to the static lint pass
+
+### Requirement: Static lints walk the literal require graph
+The check SHALL statically analyze the entry and every file reachable through literal string `require("...")` call arguments, resolving each path relative to its requiring file under ponos's module-resolution rules, without executing anything. It SHALL report:
+
+- **Unknown agent names**: a literal `ponos.agent("<name>")` string argument that resolves in no discovered registry (project `.ponos/config.toml` found upward from the invocation directory overriding the user config per agent name, exactly as `run` discovers) is a finding. Non-literal (computed) arguments and inline spec tables SHALL NOT be linted.
+- **Broken requires**: a literal require target that does not resolve to an existing module file (`.luau`, `.lua`, `init.luau`, `init.lua`) or that escapes the script tree is a finding.
+- **Missing strict directive**: the entry and every reachable file SHALL begin with a `--!strict` directive; a file without it is a finding.
+
+#### Scenario: Unknown literal agent name
+- **WHEN** a reachable file contains `ponos.agent("clawed")` and no registry defines `clawed`
+- **THEN** the check reports a finding naming the agent and exits 1
+
+#### Scenario: Computed agent name is not linted
+- **WHEN** a reachable file contains `ponos.agent(name)` where `name` is a variable
+- **THEN** the check reports no finding for that call
+
+#### Scenario: Require escaping the script tree
+- **WHEN** a reachable file contains `require("../../outside")`
+- **THEN** the check reports a finding that the path escapes the script directory
+
+#### Scenario: Missing module
+- **WHEN** a reachable file contains `require("./lib/nope")` and no such module file exists
+- **THEN** the check reports a finding naming the unresolved path
+
+#### Scenario: Missing strict directive in a module
+- **WHEN** the entry declares `--!strict` but a reachable required module does not
+- **THEN** the check reports a finding naming the module file and exits 1
+
+#### Scenario: Registry agent resolves
+- **WHEN** a reachable file contains `ponos.agent("claude")` and any discovered registry defines `claude`
+- **THEN** the check reports no finding for that call
+
+### Requirement: Typecheck pass runs luau-lsp with the embedded definitions
+The check SHALL invoke the `luau-lsp` binary discovered on PATH as `luau-lsp analyze` with the standard platform and a definitions file derived from the binary's embedded type definitions (written to a temporary location). luau-lsp's stderr SHALL pass through unmodified and unfiltered; a non-zero luau-lsp exit status SHALL make the check report findings (exit 1), and a zero exit status contributes no findings.
+
+#### Scenario: Type error caught by strict analysis
+- **WHEN** a `--!strict` script contains a member typo (e.g. `agent:sesion(...)`)
+- **THEN** luau-lsp's diagnostic output is passed through and the check exits 1
+
+#### Scenario: Warnings do not fail
+- **WHEN** luau-lsp reports only warnings (e.g. `LocalUnused`) and exits 0
+- **THEN** the check does not treat them as findings
+
+#### Scenario: luau-lsp missing from PATH
+- **WHEN** `ponos check` runs and no `luau-lsp` executable is on PATH
+- **THEN** the check prints an error naming the missing dependency and exits 2; no silent skip occurs
+
+### Requirement: Findings are collected and reported together
+The check SHALL run every pass and collect all findings rather than stopping at the first. Each in-process finding SHALL be printed to standard error as `path:line:col: message` (resolved to a real path), followed by a summary line; `--no-color` SHALL disable ANSI coloring of findings. Standard output SHALL carry no findings.
+
+#### Scenario: Multiple findings across files
+- **WHEN** the entry has a syntax error and a reachable module has an unknown agent name
+- **THEN** both findings are printed, each with its own `path:line:col:` prefix
+
+#### Scenario: Summary line
+- **WHEN** findings are reported
+- **THEN** a final summary line states the number of findings (and files affected)
+
+### Requirement: Check exit-code contract
+The check SHALL exit `0` when all passes are clean, `1` when any pass reports findings, and `2` when the check could not run: missing or unreadable script file, registry discovery failure, or `luau-lsp` missing from PATH.
+
+#### Scenario: Clean
+- **WHEN** compile, lints, and typecheck all pass
+- **THEN** the process exits 0
+
+#### Scenario: Findings
+- **WHEN** any pass reports at least one finding
+- **THEN** the process exits 1
+
+#### Scenario: Could not run
+- **WHEN** the script path does not exist, or registry discovery fails, or luau-lsp is absent
+- **THEN** the process exits 2 with an error naming the cause
+
+### Requirement: Check documentation
+The README SHALL document the `check` subcommand (its passes, the luau-lsp PATH dependency, and the strict-directive requirement) and the exit-code contract; the repository's agent instructions SHALL note the extended exit-code contract (`2` also covers "check could not run" for `check`).
+
+#### Scenario: Reader understands check
+- **WHEN** a reader follows the README check section
+- **THEN** they know what passes run, that luau-lsp must be installed, and what each exit code means
