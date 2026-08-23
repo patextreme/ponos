@@ -1,14 +1,15 @@
 --!strict
--- Typed results: a review turn whose verdict arrives as a validated,
--- structured value instead of prose to parse. Declaring
--- `result = <JSON Schema>` on the session injects a `result_submit` tool
--- into the agent; each `prompt` outcome then carries `r.result` — the last
--- accepted (schema-valid) submission, or nil if the turn ended without
--- one.
-local schema = require("./typed_results_schema")
+local schema = {
+	type = "object",
+	properties = {
+		verdict = { type = "string", enum = { "approve", "block" } },
+		score = { type = "integer", minimum = 0, maximum = 10 },
+	},
+	required = { "verdict", "score" },
+}
 
 local agent = ponos.agent("demo")
-local s = agent:session({ id = "reviewer", result = schema.review })
+local s = agent:session({ id = "reviewer", result = schema })
 
 -- Nil-check retry loop: a turn that ends without an accepted submission
 -- yields `r.result == nil` (the agent ignored the tool, was sandboxed away
