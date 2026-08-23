@@ -188,6 +188,23 @@ fn check_of_missing_script_exits_two() {
     assert!(stderr.contains("script not found"), "{stderr}");
 }
 
+#[test]
+fn registry_discovery_failure_exits_two() {
+    // Invalid TOML in the project registry: the check could not run
+    // (exit 2, error naming the cause) — distinct from findings (1).
+    let p = Project::new("bad-registry");
+    std::fs::write(
+        p.dir.join(".ponos").join("config.toml"),
+        "not valid toml [[[\n",
+    )
+    .unwrap();
+    let script = clean_script(&p);
+    let (code, stdout, stderr) = p.check(&script, &happy_lsp(), &[]);
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("invalid project config"), "{stderr}");
+}
+
 // ---------------------------------------------------------------------
 // 5.2 In-process findings
 // ---------------------------------------------------------------------
