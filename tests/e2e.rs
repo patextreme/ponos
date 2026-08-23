@@ -152,15 +152,15 @@ s:close()
 }
 
 #[test]
-fn parallel_fanout_map_in_order_with_cap() {
-    let dir = tmpdir("map");
+fn parallel_fanout_in_order_with_cap() {
+    let dir = tmpdir("parallel");
     let script = write_script(
         &dir,
         &format!(
             r#"
 local agent = ponos.agent({{ command = "{mock}", env = {{ MOCK_DELAY_MS = "100" }} }})
 local s = agent:session()
-local results = ponos.map({{"a", "b", "c", "d"}}, function(item)
+local results = ponos.parallel({{"a", "b", "c", "d"}}, function(item)
     local r = s:prompt(item)
     return item .. ":" .. r.text
 end, {{ concurrency = 2 }})
@@ -383,9 +383,165 @@ fn log_and_version_helpers() {
         r#"
 ponos.log("starting")
 assert(type(ponos.version) == "string" and #ponos.version > 0)
-assert(ponos.sleep ~= nil and ponos.spawn ~= nil and ponos.map ~= nil and ponos.join ~= nil)
+assert(ponos.sleep ~= nil and ponos.spawn ~= nil and ponos.parallel ~= nil and ponos.join ~= nil)
 "#,
     );
     let out = run(&script, &dir);
     assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+// ---------------------------------------------------------------------------
+// Constructor `config` option (session-config-options capability)
+// ---------------------------------------------------------------------------
+
+/// Select `model` + boolean `fast` options the mock advertises and mutates.
+const CONFIG_OPTIONS_JSON: &str = r#"[{"id":"model","name":"Model","type":"select","currentValue":"opus","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]},{"id":"fast","name":"Fast mode","type":"boolean","currentValue":false}]"#;
+
+#[test]
+fn constructor_config_applies_before_first_prompt() {
+    // session-config-options spec "Config applied at session creation":
+    // every entry is applied before the constructor returns (folded into
+    // the live state), so the first prompt runs under the new settings;
+    // a later setConfig composes as usual.
+    let dir = tmpdir("cfg-ctor");
+    let script = write_script(
+        &dir,
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{
+    MOCK_CONFIG_OPTIONS = '{json}',
+    MOCK_CONFIG_ECHO = "model",
+}} }})
+local s = agent:session({{ config = {{ model = "haiku", fast = true }} }})
+local options = s:configOptions()
+assert(options[1].currentValue == "haiku", tostring(options[1].currentValue))
+assert(options[2].currentValue == true, tostring(options[2].currentValue))
+local r = s:prompt("go")
+assert(r.text == "haiku", "first prompt must run under the constructor config: " .. r.text)
+s:setConfig("model", "opus")
+local r2 = s:prompt("again")
+assert(r2.text == "opus", "later setConfig must compose: " .. r2.text)
+s:close()
+"#,
+            mock = mock_agent(),
+            json = CONFIG_OPTIONS_JSON
+        ),
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn constructor_config_bad_value_fails_before_spawn() {
+    // session-config-options spec "Non-string-or-boolean value fails
+    // before spawn": the error names the invalid entry and, like the
+    // schema-compile path, fires before any subprocess spawns — the
+    // command does not exist, so a spawn would name the command instead.
+    let dir = tmpdir("cfg-bad-value");
+    let script = write_script(
+        &dir,
+        r#"
+local agent = ponos.agent({ command = "/nonexistent/ponos-test-agent" })
+local ok, err = pcall(function()
+    return agent:session({ config = { model = 42 } })
+end)
+assert(not ok, "session() must fail on a non-string-or-boolean config value")
+local msg = tostring(err)
+assert(msg:find("config.model", 1, true), "must name the entry: " .. msg)
+assert(msg:find("boolean", 1, true), "must name the allowed types: " .. msg)
+assert(not msg:find("/nonexistent", 1, true), "must fail before spawning: " .. msg)
+"#,
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+/// Count live processes whose cmdline contains `needle` (Linux /proc
+/// scan; the mock ignores extra args, so a unique token tags exactly the
+/// agent spawned for one session).
+fn count_processes(needle: &str) -> usize {
+    let mut n = 0;
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        if raw
+            .split(|b| *b == 0)
+            .any(|arg| std::str::from_utf8(arg).is_ok_and(|s| s.contains(needle)))
+        {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Poll (20 ms) up to 5 s until `count_processes(needle) == want`.
+fn wait_for_processes(needle: &str, want: usize, what: &str) {
+    for _ in 0..250 {
+        if count_processes(needle) == want {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "expected {what} (count {want}) for processes tagged {needle:?}, got {}",
+        count_processes(needle)
+    );
+}
+
+#[test]
+fn constructor_config_agent_rejection_tears_down_the_agent() {
+    // session-config-options spec "Agent rejection fails the constructor":
+    // the error carries the config id and the agent's message, and the
+    // agent subprocess is torn down by the constructor — observed live:
+    // the tagged mock appears, then disappears while the script is still
+    // sleeping, so the end-of-run sweep cannot be the reaper. The mock
+    // holds the rejection back for 400 ms (MOCK_CONFIG_REJECT_DELAY_MS),
+    // guaranteeing a wide, observable alive window.
+    let dir = tmpdir("cfg-reject");
+    let token = format!("--ponos-e2e-reject-token-{}", std::process::id());
+    let script = write_script(
+        &dir,
+        &format!(
+            r#"
+local agent = ponos.agent({{
+    command = "{mock}",
+    args = {{ "{token}" }},
+    env = {{
+        MOCK_CONFIG_OPTIONS = '{json}',
+        MOCK_CONFIG_REJECT = "model",
+        MOCK_CONFIG_REJECT_DELAY_MS = "400",
+    }},
+}})
+local ok, err = pcall(function()
+    return agent:session({{ config = {{ model = "haiku" }} }})
+end)
+assert(not ok, "session() must fail when the agent rejects the value")
+local msg = tostring(err)
+assert(msg:find("model", 1, true), "must name the config id: " .. msg)
+assert(msg:find("rejects config id model", 1, true), "must carry the agent message: " .. msg)
+ponos.sleep(3000)
+"#,
+            mock = mock_agent(),
+            token = token,
+            json = CONFIG_OPTIONS_JSON
+        ),
+    );
+    let run_dir = dir.clone();
+    let run_script = script.clone();
+    let runner = std::thread::spawn(move || run(&run_script, &run_dir));
+    wait_for_processes(&token, 1, "agent spawned before the rejected set");
+    wait_for_processes(&token, 0, "agent torn down by the constructor");
+    // The teardown was observed while the script was still in its sleep:
+    // the constructor reaped the process, not the end-of-run sweep.
+    assert!(
+        !runner.is_finished(),
+        "agent vanished before the script finished — the run-end sweep would be the reaper otherwise"
+    );
+    let out = runner.join().unwrap();
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+    assert_eq!(count_processes(&token), 0, "no process may survive the run");
 }

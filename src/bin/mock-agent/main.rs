@@ -61,6 +61,9 @@
 //!   config id: a generic JSON-RPC error for plain `id`, method-not-found
 //!   (-32601) for `id=notfound`; other ids succeed and mutate the mock's
 //!   in-memory option state
+//! - `MOCK_CONFIG_REJECT_DELAY_MS` — with `MOCK_CONFIG_REJECT`, hold the
+//!   rejection response for this many milliseconds first (keeps the agent
+//!   process observably alive mid-handshake; constructor-teardown tests)
 //! - `MOCK_CONFIG_UPDATE` — JSON array of options: after the first
 //!   prompt completes, push a `config_option_update` (`session/update`
 //!   payload) carrying the new full option set and apply it to the
@@ -394,6 +397,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             _cx| {
                     // MOCK_CONFIG_REJECT: plain `<id>` → generic error;
                     // `<id>=notfound` → method-not-found (-32601).
+                    // MOCK_CONFIG_REJECT_DELAY_MS holds the rejection back
+                    // (tests observe the live process before teardown).
                     if let Some(reject) = std::env::var("MOCK_CONFIG_REJECT")
                         .ok()
                         .filter(|r| !r.is_empty())
@@ -403,6 +408,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None => (reject.clone(), false),
                         };
                         if req.config_id.0.as_ref() == rid {
+                            if let Some(ms) = std::env::var("MOCK_CONFIG_REJECT_DELAY_MS")
+                                .ok()
+                                .filter(|v| !v.is_empty())
+                            {
+                                tokio::time::sleep(Duration::from_millis(ms.parse().unwrap_or(0)))
+                                    .await;
+                            }
                             let error = if notfound {
                                 agent_client_protocol::Error::method_not_found()
                             } else {

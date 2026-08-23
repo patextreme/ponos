@@ -4,7 +4,7 @@ local agent = ponos.agent("demo")
 local s = agent:session({ id = "pool" })
 
 local targets = { "alpha", "beta", "gamma", "delta", "epsilon" }
-local outcomes = ponos.map(
+local outcomes = ponos.parallel(
     targets,
     function(target)
         local r = s:prompt(("Summarize the changes in %s."):format(target))

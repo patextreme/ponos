@@ -215,7 +215,7 @@ fn submitted_value_is_returned_as_luau_value() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{
+local s = agent:session({{ resultSchema = {{
     type = "object",
     properties = {{ verdict = {{ type = "string" }}, score = {{ type = "integer" }} }},
     required = {{ "verdict" }}
@@ -242,7 +242,7 @@ fn non_object_root_schema_returns_scalar_result() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{ type = "string", enum = {{ "ship", "block" }} }} }})
+local s = agent:session({{ resultSchema = {{ type = "string", enum = {{ "ship", "block" }} }} }})
 local r = s:prompt("decide")
 assert(r.result == "ship", tostring(r.result))
 s:close()
@@ -260,7 +260,7 @@ fn invalid_then_valid_submission_proves_in_turn_retry() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{
+local s = agent:session({{ resultSchema = {{
     type = "object",
     properties = {{ verdict = {{ type = "string" }} }},
     required = {{ "verdict" }}
@@ -291,7 +291,7 @@ fn last_submission_wins_within_a_turn() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{
+local s = agent:session({{ resultSchema = {{
     type = "object", properties = {{ n = {{ type = "integer" }} }}, required = {{ "n" }}
 }} }})
 local r = s:prompt("count")
@@ -311,7 +311,7 @@ fn fresh_slot_per_turn() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{
+local s = agent:session({{ resultSchema = {{
     type = "object", properties = {{ n = {{ type = "integer" }} }}, required = {{ "n" }}
 }} }})
 local first = s:prompt("one")
@@ -334,7 +334,7 @@ fn cancelled_turn_discards_its_submission() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{
+local s = agent:session({{ resultSchema = {{
     type = "object", properties = {{ n = {{ type = "integer" }} }}, required = {{ "n" }}
 }} }})
 local work = ponos.spawn(function() return s:prompt("slow") end)
@@ -360,7 +360,7 @@ fn no_submit_turn_yields_nil_result() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{ type = "object" }} }})
+local s = agent:session({{ resultSchema = {{ type = "object" }} }})
 local r = s:prompt("hello")
 -- The mock echoes the (augmented) prompt text.
 assert(r.text:sub(1, 5) == "hello", r.text)
@@ -384,7 +384,7 @@ fn agent_ignoring_mcp_degrades_to_nil_with_one_lifecycle_line() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{ type = "object" }} }})
+local s = agent:session({{ resultSchema = {{ type = "object" }} }})
 local r = s:prompt("hello")
 assert(r.result == nil, tostring(r.result))
 assert(r.stopReason == "end_turn", r.stopReason)
@@ -415,7 +415,7 @@ fn unspawnable_injected_bridge_does_not_hang_the_turn() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{
+local s = agent:session({{ resultSchema = {{
     type = "object",
     properties = {{ verdict = {{ type = "string" }} }},
     required = {{ "verdict" }}
@@ -451,7 +451,7 @@ fn prompt_on_result_session_passes_text_verbatim() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{ type = "object" }} }})
+local s = agent:session({{ resultSchema = {{ type = "object" }} }})
 local r = s:prompt("hello")
 assert(r.text == "hello", r.text)
 -- Plain sessions are equally unmodified.
@@ -479,7 +479,7 @@ fn result_session_injects_ponos_server_alongside_user_servers() {
             r#"
 local agent = ponos.agent({mock})
 local s = agent:session({{
-    result = {{ type = "object" }},
+    resultSchema = {{ type = "object" }},
     mcpServers = {{ {{
         type = "stdio", name = "ctx", command = "/bin/true",
         args = {{ "--flag" }}, env = {{ {{ name = "K", value = "V" }} }},
@@ -534,7 +534,7 @@ fn injected_server_lists_single_wrapped_tool() {
         &format!(
             r#"
 local agent = ponos.agent({mock})
-local s = agent:session({{ result = {{
+local s = agent:session({{ resultSchema = {{
     type = "object",
     properties = {{ verdict = {{ type = "string" }} }},
     required = {{ "verdict" }}
@@ -584,10 +584,10 @@ fn concurrent_result_sessions_stay_independent() {
             r#"
 local a = ponos.agent({mock_a})
 local b = ponos.agent({mock_b})
-local sa = a:session({{ result = {{
+local sa = a:session({{ resultSchema = {{
     type = "object", properties = {{ verdict = {{ type = "string" }} }}, required = {{ "verdict" }}
 }} }})
-local sb = b:session({{ result = {{ type = "string", enum = {{ "ship", "block" }} }} }})
+local sb = b:session({{ resultSchema = {{ type = "string", enum = {{ "ship", "block" }} }} }})
 local ta = ponos.spawn(function() return sa:prompt("review a") end)
 local tb = ponos.spawn(function() return sb:prompt("review b") end)
 local ra = ta:await()
@@ -618,7 +618,7 @@ fn invalid_schema_fails_at_session_call_naming_the_problem() {
         r#"
 local agent = ponos.agent({mock})
 local ok, err = pcall(function()
-    return agent:session({{ result = {{ type = "objekt" }} }})
+    return agent:session({{ resultSchema = {{ type = "objekt" }} }})
 end)
 assert(not ok, "session() must fail on an invalid schema")
 assert(tostring(err):find("schema", 1, true), tostring(err))
@@ -639,7 +639,7 @@ fn remote_ref_is_rejected_before_any_subprocess_spawns() {
 -- the error would name the command, not the schema.
 local agent = ponos.agent({ command = "/nonexistent/ponos-test-agent" })
 local ok, err = pcall(function()
-    return agent:session({ result = { ["$ref"] = "https://example.com/schema.json" } })
+    return agent:session({ resultSchema = { ["$ref"] = "https://example.com/schema.json" } })
 end)
 assert(not ok, "session() must fail on a remote $ref")
 assert(tostring(err):find("remote $ref", 1, true), tostring(err))
@@ -658,7 +658,7 @@ fn valid_schema_creates_a_session_without_error() {
             r#"
 local agent = ponos.agent({mock})
 local s = agent:session({{
-    result = {{
+    resultSchema = {{
         type = "object",
         properties = {{ verdict = {{ type = "string" }} }},
         required = {{ "verdict" }}
@@ -670,6 +670,29 @@ s:close()
             mock = mock_agent(&[("MOCK_NO_MCP", "1")])
         ),
     );
+}
+
+#[test]
+fn legacy_result_option_name_declares_no_contract() {
+    // typed-results spec "Legacy option name is not read": passing the
+    // former `result` key creates a plain session — no contract, no
+    // injected submit tool, nil outcome `result`. MOCK_SUBMIT would fire
+    // on a contract session (the mock submits only when a `ponos` server
+    // was offered), so the nil outcome proves the old key is not read.
+    let dir = tmpdir("legacy-result");
+    let script = format!(
+        r#"
+local agent = ponos.agent({mock})
+local s = agent:session({{ result = {{ type = "object" }} }})
+local r = s:prompt("ignored")
+assert(r.text == "ignored", r.text)
+assert(r.result == nil, "legacy result key must declare no contract")
+s:close()
+"#,
+        mock = mock_agent(&[("MOCK_SUBMIT", r#"{"verdict":"approve"}"#)])
+    );
+    let (stdout, stderr, ok) = run_script(&dir, &script, false);
+    assert!(ok, "stdout:\n{stdout}\nstderr:\n{stderr}");
 }
 
 // ---------------------------------------------------------------------------

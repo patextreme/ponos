@@ -1,4 +1,4 @@
-//! Task runtime backing `ponos.spawn` / `ponos.join` / `ponos.map`.
+//! Task runtime backing `ponos.spawn` / `ponos.join` / `ponos.parallel`.
 //!
 //! A task is a Lua function driven as a coroutine on the runtime's local
 //! executor (mlua's async support). Completion state lives in `TaskState`,

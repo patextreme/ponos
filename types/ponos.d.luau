@@ -24,9 +24,9 @@ export type Usage = {
 -- The result of `session:prompt(text)`. `tostring(r)` returns `r.text` at
 -- runtime via a metatable; definitions cannot express that sugar, so use
 -- `r.text` explicitly when the type checker wants a string. `result` is
--- the turn's typed submission (see `SessionOptions.result`): a Luau value
--- converted from the accepted JSON, `nil` when the session declared no
--- contract or the turn had no accepted submission.
+-- the turn's typed submission (see `SessionOptions.resultSchema`): a Luau
+-- value converted from the accepted JSON, `nil` when the session declared
+-- no contract or the turn had no accepted submission.
 export type PromptResult = {
 	text: string,
 	stopReason: string,
@@ -59,15 +59,23 @@ export type McpServerHttp = {
 export type McpServer = McpServerStdio | McpServerHttp
 
 -- Options for `agent:session(…)`. All fields optional; `id` defaults to
--- `s1, s2, …` per agent, `cwd` to the invocation directory. `result` is a
--- JSON Schema expressed as a plain Luau table: when set, the session gets
--- a typed-result contract — prompts carry a submit-tool instruction and
--- the outcome's `result` field carries the accepted submission.
+-- `s1, s2, …` per agent, `cwd` to the invocation directory. `resultSchema`
+-- is a JSON Schema expressed as a plain Luau table: when set, the session
+-- gets a typed-result contract — prompts carry a submit-tool instruction
+-- and the outcome's `result` field carries the accepted submission.
+-- `config` maps config-option ids to select choice ids (strings) or
+-- boolean values, applied when the session is created (one `setConfig`
+-- per entry; agent responses are authoritative). Declared as a union of
+-- index signatures rather than `{ [string]: string | boolean }` because
+-- table literals never unify with union-valued index signatures
+-- (definitions-file types check invariantly) — the cost is that mixed
+-- string/boolean tables are flagged; split entries or annotate.
 export type SessionOptions = {
 	id: string?,
 	cwd: string?,
 	mcpServers: { McpServer }?,
-	result: { [string]: any }?,
+	resultSchema: { [string]: any }?,
+	config: ({ [string]: string } | { [string]: boolean })?,
 }
 
 -- Options for `session:prompt(text, …)`.
@@ -103,13 +111,13 @@ export type AgentSpec = {
 	env: { [string]: string }?,
 }
 
--- Options for `ponos.map(items, fn, …)`.
-export type MapOptions = {
+-- Options for `ponos.parallel(items, fn, …)`.
+export type ParallelOptions = {
 	concurrency: number?,
 }
 
--- Per-item outcome of `ponos.map` / `ponos.join`: narrow on `entry.ok`
--- (bind the entry to a local first) to reach `value` or `error`.
+-- Per-item outcome of `ponos.parallel` / `ponos.join`: narrow on
+-- `entry.ok` (bind the entry to a local first) to reach `value` or `error`.
 export type Outcome<T> = {
 	ok: true,
 	value: T,
@@ -148,7 +156,7 @@ declare ponos: {
 	agent: (spec: string | AgentSpec) -> Agent,
 	spawn: <T>(f: () -> T) -> Task<T>,
 	join: <T>(tasks: { Task<T> }) -> { Outcome<T> },
-	map: <T, U>(items: { T }, fn: (item: T) -> U, opts: MapOptions?) -> { Outcome<U> },
+	parallel: <T, U>(items: { T }, fn: (item: T) -> U, opts: ParallelOptions?) -> { Outcome<U> },
 	sleep: (ms: number) -> (),
 	log: (msg: string) -> (),
 	exit: (code: number?) -> (),

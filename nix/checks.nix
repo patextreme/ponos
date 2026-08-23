@@ -31,6 +31,12 @@
       // {
         src = config.ponosSrc;
         inherit cargoArtifacts;
+        # tests/analyze.rs runs the *real* luau-lsp through `ponos check`
+        # (the embedded definitions under test) and discovers it via
+        # PATH; PONOS_REQUIRE_REAL_LSP makes its absence a hard failure
+        # here so the sandbox can never silently skip that contract.
+        nativeBuildInputs = [pkgs.luau-lsp];
+        env.PONOS_REQUIRE_REAL_LSP = "1";
       });
 
     # `nix flake check` evaluates packages but does not build them, so a

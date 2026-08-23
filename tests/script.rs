@@ -222,3 +222,30 @@ fn spawn_from_lua_chunk() {
         assert_eq!(t, "table");
     }));
 }
+
+#[test]
+fn namespace_map_rename_is_hard() {
+    // Scripting spec (revise-script-api): `ponos.map` → `ponos.parallel`
+    // with no alias — the old key reads as nil, so a legacy call errors
+    // at the call site instead of silently doing something else.
+    let dir = tmpdir("parallel-rename");
+    std::fs::write(dir.join("main.luau"), "").unwrap();
+    let lua = test_lua(&dir);
+
+    let gone: Value = lua.load("return ponos.map").eval().unwrap();
+    assert!(matches!(gone, Value::Nil), "ponos.map must read as nil");
+
+    let present: Value = lua.load("return ponos.parallel").eval().unwrap();
+    assert!(
+        matches!(present, Value::Function(_)),
+        "ponos.parallel must exist"
+    );
+    let err = lua
+        .load("ponos.map({1}, function() end)")
+        .eval::<()>()
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("nil value"),
+        "calling the removed name must error: {err}"
+    );
+}

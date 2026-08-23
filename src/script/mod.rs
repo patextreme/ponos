@@ -334,9 +334,45 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                     })?;
                 }
 
+                // Per-session config applied at creation (session-config-options
+                // capability): keys are config-option ids, values are select
+                // choice ids (strings) or booleans. Typed before the session
+                // spawns — the same pre-send rule as setConfig, extended to
+                // the spawn boundary — so an invalid entry never costs a
+                // subprocess.
+                let mut constructor_config: Vec<(String, SessionConfigOptionValue)> = Vec::new();
+                if let Some(cfg) = opts.get::<Option<Table>>("config")? {
+                    for pair in cfg.pairs::<Value, Value>() {
+                        let (key, value) = pair?;
+                        let id = match key {
+                            Value::String(s) => s.to_str()?.to_string(),
+                            other => {
+                                return Err(mlua::Error::runtime(format!(
+                                    "config keys must be strings (config-option ids), got {}",
+                                    other.type_name()
+                                )));
+                            }
+                        };
+                        let wire_value = match value {
+                            Value::String(s) => {
+                                SessionConfigOptionValue::value_id(s.to_str()?.to_string())
+                            }
+                            Value::Boolean(b) => SessionConfigOptionValue::boolean(b),
+                            other => {
+                                return Err(mlua::Error::runtime(format!(
+                                    "config.{id} must be a string (select value id) or boolean, \
+                                 got {}",
+                                    other.type_name()
+                                )));
+                            }
+                        };
+                        constructor_config.push((id, wire_value));
+                    }
+                }
+
                 // Typed result contract: eager compilation so schema errors
                 // fail at the author's line, before any subprocess spawns.
-                let result = match opts.get::<Option<Value>>("result")? {
+                let result = match opts.get::<Option<Value>>("resultSchema")? {
                     Some(raw) => {
                         let json: serde_json::Value = lua.from_value(raw).map_err(|e| {
                             mlua::Error::runtime(format!("invalid result schema: {e}"))
@@ -366,6 +402,24 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                 .await
                 .map_err(|e| mlua::Error::runtime(e.to_string()))?;
                 state.sessions.borrow_mut().push(handle.clone());
+
+                // Apply constructor config entries through the same path as
+                // setConfig (one session/set_config_option each, in table
+                // iteration order — order across entries is unspecified). On
+                // rejection the session is torn down before the error
+                // surfaces, so no subprocess or registry entry survives a
+                // failed constructor.
+                for (id, value) in constructor_config {
+                    if let Err(e) = handle.set_config(id, value).await {
+                        handle.close();
+                        handle.join().await;
+                        state
+                            .sessions
+                            .borrow_mut()
+                            .retain(|s| s.label != handle.label);
+                        return Err(mlua::Error::runtime(e));
+                    }
+                }
 
                 new_session_obj(&lua, handle)
             }
@@ -455,8 +509,8 @@ fn bind_ponos(lua: &Lua) -> mlua::Result<()> {
     })?;
     ponos.set("join", join)?;
 
-    // ponos.map(items, fn, {concurrency}) -> outcome entries in item order
-    let map = lua.create_async_function(
+    // ponos.parallel(items, fn, {concurrency}) -> outcome entries in item order
+    let parallel = lua.create_async_function(
         |lua, (items, f, opts): (Table, Function, Option<Table>)| async move {
             let state = runtime_state(&lua)?;
             let concurrency: usize = match &opts {
@@ -503,7 +557,7 @@ fn bind_ponos(lua: &Lua) -> mlua::Result<()> {
             Ok(outcomes)
         },
     )?;
-    ponos.set("map", map)?;
+    ponos.set("parallel", parallel)?;
 
     // ponos.sleep(ms)
     let sleep = lua.create_async_function(|_lua, ms: u64| async move {

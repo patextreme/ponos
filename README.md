@@ -25,7 +25,7 @@ s:close()
 Fan out over many targets with a concurrency cap:
 
 ```lua
-local outcomes = ponos.map(targets, function(t)
+local outcomes = ponos.parallel(targets, function(t)
     return s:prompt("Summarize " .. t)
 end, { concurrency = 2 })
 ```
@@ -146,21 +146,21 @@ never hang.
 | API | Description |
 | --- | --- |
 | `ponos.agent(name_or_spec)` | Agent factory (registry name or inline `{command=, args=, env=}` spec) |
-| `agent:session({id=, cwd=, mcpServers=, result=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `result` declares a typed-result contract (see below) |
-| `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`__tostring` → text) |
+| `agent:session({id=, cwd=, mcpServers=, resultSchema=, config=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `resultSchema` declares a typed-result contract (see below); `config` sets session config options at creation (see below) |
+| `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`result` is the turn's typed-result value, `nil` without one; `__tostring` → text) |
 | `session:cancel()` | Cancels the in-flight turn (returns `stopReason = "cancelled"`) |
 | `session:close()` | Ends the session and reaps the agent process |
 | `session:configOptions()` | Live per-session config options (empty table when the agent offers none) |
 | `session:setConfig(id, value)` | Set a config option between turns — string (select choice id) or boolean value; raises on agent rejection |
 | `ponos.spawn(fn)` → `task:await()` | Concurrent task; errors re-raise at the await site |
 | `ponos.join({task, …})` | Wait for tasks → per-task `{ok, value}` / `{ok=false, error}` entries |
-| `ponos.map(items, fn, {concurrency=})` | Fan-out (default unlimited) → per-item outcome entries |
+| `ponos.parallel(items, fn, {concurrency=})` | Parallel fan-out (default unlimited) → per-item outcome entries in item order |
 | `ponos.sleep(ms)` / `ponos.log(msg)` / `ponos.exit(code)` / `ponos.version` | Runtime helpers |
 
 ### Typed results
 
-`agent:session({ result = <schema> })` declares a typed result contract:
-a JSON Schema as a plain Luau table. ponos then
+`agent:session({ resultSchema = <schema> })` declares a typed result
+contract: a JSON Schema as a plain Luau table. ponos then
 
 - injects one extra MCP server into the agent's session, named `ponos`,
   exposing a single tool `result_submit` (agents that derive tool names
@@ -187,7 +187,7 @@ empty slot; cancelled and timed-out turns discard what they had gathered.
 local agent = ponos.agent("claude")
 local s = agent:session({
     id = "reviewer",
-    result = {
+    resultSchema = {
         type = "object",
         properties = {
             verdict = { type = "string", enum = { "approve", "block" } },
@@ -247,16 +247,25 @@ advertises, and keeps them live as the agent pushes changes:
 ```lua
 --!strict
 local claude = ponos.agent("claude")
-local opus = claude:session({ id = "reviewer" })
-local haiku = claude:session({ id = "summarizer" })
+local opus = claude:session({ id = "reviewer", config = { model = "claude-opus-4-5" } })
+local haiku = claude:session({ id = "summarizer", config = { model = "claude-haiku-4-5" } })
 
 for _, option in ipairs(opus:configOptions()) do
     ponos.log(("%s = %s"):format(option.id, tostring(option.currentValue)))
 end
 
-opus:setConfig("model", "claude-opus-4-5")
-haiku:setConfig("model", "claude-haiku-4-5")
+haiku:setConfig("model", "claude-opus-4-5") -- between turns
 ```
+
+The `config` session option is sugar for pinning settings at creation:
+a Luau table mapping config-option ids to string (select choice id) or
+boolean values, applied after the agent session is created and before
+`session()` returns — one `setConfig` per entry, in unspecified order, with
+no local validation (the agent's response is authoritative). If the agent
+rejects any value, `session()` raises a catchable Lua error carrying the
+config id and the agent's message, and the spawned agent subprocess is
+torn down. Non-string/non-boolean values raise before any subprocess
+spawns. `setConfig` remains the between-turns path for later changes.
 
 `configOptions()` returns the live option list: each entry has `id`,
 `name`, `type` (`"select"` or `"boolean"`), `currentValue` (the selected
@@ -264,10 +273,10 @@ choice id, or the toggle state), an optional `category` (a UX hint — never
 rely on it), and — for select options — an `options` array of
 `{ id, name, description? }` choices.
 
-`setConfig(id, value)` accepts a string (a select choice id) or a boolean,
-and is serialized with prompt turns: a call issued while a turn is in
-flight waits for it, so config changes apply strictly between turns. On
-agent rejection — or when the agent does not support the method — it
+`config`/`setConfig` accept strings (select choice ids) or booleans, and
+are serialized with prompt turns: a call issued while a turn is in flight
+waits for it, so config changes apply strictly between turns. On agent
+rejection — or when the agent does not support the method — `setConfig`
 raises a catchable Lua error carrying the config id and the agent's
 message; on success it returns `nil` and updates the live state.
 
@@ -277,7 +286,8 @@ message; on success it returns `nil` and updates the live state.
 and subagent personas this way) — enumerate `configOptions()` first and
 never assume a hardcoded id exists. The process-level alternative (env
 vars like `ANTHROPIC_MODEL` in the registry) cannot vary per session; the
-fan-out above — one agent, two models — is exactly what `setConfig` is
+fan-out above — one agent, two models — is exactly what constructor
+`config` (or `setConfig`) is
 for. The [model-fanout example](examples/model-fanout.luau) shows the
 full pattern; successful sets and agent-pushed changes each render one
 lifecycle line (`--verbose`).
@@ -372,7 +382,7 @@ require("lspconfig").luau_lsp.setup({
 
 Known residuals of the definitions (none affect execution):
 
-- generic `ponos.map` callbacks occasionally need an explicit parameter
+- generic `ponos.parallel` callbacks occasionally need an explicit parameter
   annotation (`function(item: string) …`) for the item type to propagate;
 - the `tostring(r)` prompt-result sugar is not covered by the definitions —
   use `r.text` where the type checker wants a string;
@@ -381,6 +391,11 @@ Known residuals of the definitions (none affect execution):
 - typo'd *option* keys in a session-options table literal are not flagged
   by current luau-lsp (a table-literal excess-key limitation) — invented
   *outcome* fields (`r.txt`) are flagged, double-check option names by hand;
+- mixed `config` tables (string and boolean values together) are flagged
+  by current luau-lsp — table literals never unify with union-valued index
+  signatures, so the option is declared as `{ [string]: string } |
+  `{ [string]: boolean }` (mixed splits into the constructor plus a
+  `setConfig` call, or an annotated table); execution is unaffected;
 - the require-tree restriction (no paths escaping the script directory) is
   not enforced by editor analysis (luau-lsp resolves requires without
   ponos's escape-guard); the runtime enforces it at require time and

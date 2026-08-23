@@ -6,7 +6,8 @@
 -- and analyzed by the `ponos-analyze` nix check. If a member documented in
 -- the definitions is removed or renamed in the runtime, this script fails.
 
--- ponos.agent(name) → agent:session(SessionOptions: id, cwd, mcpServers)
+-- ponos.agent(name) → agent:session(SessionOptions: id, cwd,
+-- mcpServers, resultSchema, config)
 local agent = ponos.agent("demo")
 local servers: { McpServer } = {
 	{
@@ -50,16 +51,17 @@ local ri = si:prompt("ignored")
 assert(ri.text == "inline reply", "inline text: " .. ri.text)
 si:close()
 
--- Typed results (SessionOptions.result / PromptResult.result): a result
--- session whose mock agent submits through the injected MCP bridge; the
--- outcome's `result` field carries the accepted submission end to end.
+-- Typed results (SessionOptions.resultSchema / PromptResult.result): a
+-- result session whose mock agent submits through the injected MCP
+-- bridge; the outcome's `result` field carries the accepted submission
+-- end to end.
 local result_agent = ponos.agent({
 	command = "@MOCK_BIN@",
 	args = {},
 	env = { MOCK_SUBMIT = '{"verdict":"approve"}' },
 })
 local sr = result_agent:session({
-	result = {
+	resultSchema = {
 		type = "object",
 		properties = { verdict = { type = "string" } },
 		required = { "verdict" },
@@ -71,18 +73,21 @@ assert(rr.result.verdict == "approve", "result.verdict: " .. tostring(rr.result.
 assert(rr.stopReason == "end_turn", "result stopReason: " .. rr.stopReason)
 sr:close()
 
--- Per-session config (Session.configOptions / Session.setConfig): the
--- mock advertises a select `model` option plus a boolean `fast` option and
--- echoes the current model in each reply (MOCK_CONFIG_ECHO).
+-- Per-session config (SessionOptions.config / Session.configOptions /
+-- Session.setConfig): the mock advertises a select `model` option plus a
+-- boolean `fast` option and echoes the current model in each reply
+-- (MOCK_CONFIG_ECHO). The constructor `config` option pins the model at
+-- creation; setConfig covers between-turn changes (both value kinds:
+-- strings are select choice ids, booleans are boolean options).
 local cfg_agent = ponos.agent("demo-config")
-local sc = cfg_agent:session()
+local sc = cfg_agent:session({ config = { model = "haiku" } })
 local cfg = sc:configOptions()
 assert(#cfg == 2, "configOptions count: " .. tostring(#cfg))
 local model = cfg[1]
 assert(model.id == "model", "model id: " .. model.id)
 assert(model.name == "Model", "model name: " .. model.name)
 assert(model.type == "select", "model type: " .. model.type)
-assert(model.currentValue == "opus", "model value: " .. tostring(model.currentValue))
+assert(model.currentValue == "haiku", "model value: " .. tostring(model.currentValue))
 assert(model.category == "model", "model category: " .. tostring(model.category))
 local choices = model.options
 assert(choices ~= nil and #choices == 2, "model choices")
@@ -95,14 +100,13 @@ assert(fast.currentValue == false, "fast value: " .. tostring(fast.currentValue)
 assert(fast.options == nil, "boolean options must be nil")
 assert(fast.category == nil, "absent category must be nil")
 
-sc:setConfig("model", "haiku")
-local cfg_after = sc:configOptions()
-assert(cfg_after[1].currentValue == "haiku", "model after: " .. tostring(cfg_after[1].currentValue))
 local rc = sc:prompt("go")
 assert(rc.text == "haiku", "config echo: " .. rc.text)
+sc:setConfig("model", "opus")
 sc:setConfig("fast", true)
-local cfg_fast = sc:configOptions()
-assert(cfg_fast[2].currentValue == true, "fast after: " .. tostring(cfg_fast[2].currentValue))
+local cfg_after = sc:configOptions()
+assert(cfg_after[1].currentValue == "opus", "model after: " .. tostring(cfg_after[1].currentValue))
+assert(cfg_after[2].currentValue == true, "fast after: " .. tostring(cfg_after[2].currentValue))
 sc:close()
 
 -- session:cancel() on a hanging turn → stopReason == "cancelled".
@@ -146,25 +150,25 @@ else
 	assert(e2.error:find("join boom", 1, true) ~= nil, "join error: " .. e2.error)
 end
 
--- ponos.map with concurrency: ok and error entries, in item order.
-local outcomes = ponos.map({ "alpha", "beta" }, function(item)
+-- ponos.parallel with concurrency: ok and error entries, in item order.
+local outcomes = ponos.parallel({ "alpha", "beta" }, function(item)
 	if item == "beta" then
 		error("bad item", 0)
 	end
 	return item:upper()
 end, { concurrency = 2 })
-assert(#outcomes == 2, "map count: " .. tostring(#outcomes))
+assert(#outcomes == 2, "parallel count: " .. tostring(#outcomes))
 local m1 = outcomes[1]
 if m1.ok then
-	assert(m1.value == "ALPHA", "map value: " .. m1.value)
+	assert(m1.value == "ALPHA", "parallel value: " .. m1.value)
 else
-	error("map[1] should be ok: " .. m1.error)
+	error("parallel[1] should be ok: " .. m1.error)
 end
 local m2 = outcomes[2]
 if m2.ok then
-	error("map[2] should have failed: " .. tostring(m2.value))
+	error("parallel[2] should have failed: " .. tostring(m2.value))
 else
-	assert(m2.error:find("bad item", 1, true) ~= nil, "map error: " .. m2.error)
+	assert(m2.error:find("bad item", 1, true) ~= nil, "parallel error: " .. m2.error)
 end
 
 -- ponos.log, ponos.version.
