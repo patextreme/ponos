@@ -583,9 +583,13 @@ pub fn setup_lua(cfg: &RunConfig) -> mlua::Result<Lua> {
     os_safe.set("clock", os.get::<Function>("clock")?)?;
     globals.set("os", os_safe)?;
 
-    // require: relative to the script tree only.
-    let script_root = cfg
-        .script_path
+    // require: relative to the script tree only. Canonicalize the entry
+    // path so the sandbox root lives in the same absolute namespace as
+    // chunk names (`@/abs/...`, set in `run`): the escape guard compares
+    // the two, and a relative root would reject every require made by a
+    // script invoked through a relative path (e.g. `ponos run dir/s.luau`).
+    let entry = std::fs::canonicalize(&cfg.script_path).unwrap_or_else(|_| cfg.script_path.clone());
+    let script_root = entry
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));

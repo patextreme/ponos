@@ -130,6 +130,24 @@ fn nonexistent_script_names_path() {
 }
 
 #[test]
+fn relative_script_path_with_require_runs() {
+    // A script invoked through a relative path (with a directory
+    // component) must still be able to require sibling modules: the
+    // require sandbox root must share the absolute namespace of chunk
+    // names, or every require is rejected as escaping the tree.
+    let project = Project::new("relative-require", &[]);
+    std::fs::create_dir_all(project.dir.join("sub")).unwrap();
+    std::fs::write(project.dir.join("sub/mod.luau"), "return 42").unwrap();
+    std::fs::write(
+        project.dir.join("sub/main.luau"),
+        "local n = require('./mod')\nassert(n == 42)\n",
+    )
+    .unwrap();
+    let (code, _, stderr) = project.run(&PathBuf::from("sub/main.luau"), &["--quiet"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+}
+
+#[test]
 fn attributed_colored_output_for_two_sessions() {
     let project = Project::new("color", &[("MOCK_CHUNKS", "hello world")]);
     let script = project.script(
