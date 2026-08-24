@@ -12,22 +12,18 @@ local MAX_ATTEMPTS = 3
 local function buildPrompt(predicate: string, payload: string): string
 	return string.format(
 		[[
-Review if the following predicate is true in the payload, then submit the verdict as the JSON boolean true or false by calling this session's result submit tool (its name contains "ponos_result_submit"; the value must be a boolean).
+Review if the following predicate is true in the payload, then submit the verdict as the JSON boolean true or false by calling this session's ponos result submit tool.
 
 ---
 
 Predicate:
 
-```
 %s
-```
 
 ---
 
 Payload:
-```
 %s
-```
 
 ]],
 		predicate,
@@ -50,8 +46,6 @@ local function predicateAgent(predicate: string, payload: string, options: Predi
 		local verdict = promptResult.result :: boolean?
 		if verdict ~= nil then
 			return verdict
-		else
-			session:prompt("What tools do you have?")
 		end
 		ponos.log(`judge {options.sessionId} submitted no verdict (attempt {attempt}/{MAX_ATTEMPTS})`)
 	end
