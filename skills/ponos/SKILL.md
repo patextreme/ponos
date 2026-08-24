@@ -51,17 +51,20 @@ owns its own agent subprocess; closing a session reaps the process.
 ## Script rules (the sandbox)
 
 Scripts run in a curated Luau environment. Available: `string`, `table`,
-`math`, `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, `print`, and a
-restricted `coroutine` table with only `yield` (the async runtime needs
-it). There is **no** file I/O, no `io`, no subprocesses, no network, no
+`math`, `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, `print`, the
+standard Luau base library (`pcall`, `error`, `assert`, `tostring`,
+`tonumber`, `pairs`, `ipairs`, `select`, `type`/`typeof`,
+`setmetatable`/`getmetatable`, `rawget`/`rawset`, …), and a restricted
+`coroutine` table with only `yield` (the async runtime needs it). There is
+**no** file I/O, no `io`, no subprocesses, no network, no
 `debug`, no `loadstring`/`collectgarbage`. Do not fight this —
 orchestration logic belongs in the script; anything touching the machine
 belongs in the *agent's* prompt or the agent registry.
 
 `require` resolves `.luau` modules relative to the requiring file
-(`foo.luau`, `foo.lua`, `foo/init.luau`) and rejects paths escaping the
-script tree. `--!strict` is enforced by `ponos check` on the entry and
-every reachable file.
+(`foo.luau`, `foo.lua`, `foo/init.luau`, `foo/init.lua`) and rejects
+paths escaping the script tree. `--!strict` is enforced by `ponos check`
+on the entry and every reachable file.
 
 ## API reference
 
@@ -100,10 +103,14 @@ Session options (`agent:session({...})`; all optional):
   tool activity ends a run; falls back to the previous non-empty run if
   the turn ends on tool activity; `""` for cancelled turns). Narration
   streams to the terminal but does not pollute `r.text`. `tostring(r)`
-  is `r.text` at runtime — but write `r.text` explicitly under `--!strict`
-  (the sugar is not covered by the type definitions).
-- `stopReason` — `"end_turn"`, `"max_tokens"`, `"max_turn_requests"`,
-  `"refusal"`, or `"cancelled"`.
+  is `r.text` at runtime and type-checks fine (`tostring` takes `any`);
+  the sugar itself is not covered by the type definitions, so write
+  `r.text` explicitly wherever the checker expects a `string` — implicit
+  coercion (`r .. ""`, a `string`-typed binding) is a type error.
+- `stopReason` — typed as plain `string` (agents report it; the set is
+  open, not a closed enum). Known values: `"end_turn"`, `"max_tokens"`,
+  `"max_turn_requests"`, `"refusal"`, `"cancelled"` — keep an `else`
+  branch when branching on it.
 - `usage` — `{ input, cacheRead, cacheWrite, output }` (zeros when
   unreported).
 - `result` — the turn's typed submission, or `nil` (see below).
@@ -160,14 +167,14 @@ local outcomes = ponos.parallel(
         local s = agent:session({ id = "rev-" .. target })
         local r = s:prompt(("Summarize the changes in %s."):format(target))
         s:close()
-        return r.text
+        return ("%s: %s"):format(target, tostring(r))
     end,
     { concurrency = 2 }
 )
 
 for i, entry in ipairs(outcomes) do
     if entry.ok then
-        ponos.log(("%s: %s"):format(targets[i], entry.value))
+        ponos.log(entry.value)
     else
         ponos.log(("FAILED %d: %s"):format(i, entry.error))
     end
@@ -206,12 +213,17 @@ s:close()
 Watchdog cancel (a slow turn returns `stopReason = "cancelled"`):
 
 ```lua
+--!strict
+local agent = ponos.agent("claude")
+local s = agent:session({ id = "slow" })
+
 local work = ponos.spawn(function()
     return s:prompt("Take your time on this one").stopReason
 end)
 ponos.sleep(30_000)
 s:cancel()
 assert(work:await() == "cancelled")
+s:close()
 ```
 
 ## Typed results, details
@@ -239,11 +251,14 @@ options. Pin at creation with `config`, change between turns with
 `setConfig`, enumerate with `configOptions()`:
 
 ```lua
+--!strict
+local agent = ponos.agent("claude")
 local reviewer = agent:session({ id = "rev", config = { model = "claude-opus-4-5" } })
 reviewer:setConfig("model", "claude-haiku-4-5") -- between turns
 for _, o in ipairs(reviewer:configOptions()) do
     ponos.log(("%s = %s"):format(o.id, tostring(o.currentValue)))
 end
+reviewer:close()
 ```
 
 **Option ids and value ids are agent-defined** — `"model"` belongs to the
@@ -295,7 +310,9 @@ so delete dead requires.
 ## Pitfall checklist
 
 - Missing `--!strict` on the entry (or a required module) → check finding.
-- `tostring(r)` under `--!strict` → type error; use `r.text`.
+- Implicit `PromptResult`→`string` coercion under `--!strict` (`r .. ""`,
+  a `string`-typed binding) → type error — write `r.text` (`tostring(r)`
+  itself is fine).
 - Sharing one session across `parallel` workers → turns silently serialize
   (turn lock); pool sessions instead.
 - `ponos.parallel` callback losing the item type → annotate the parameter
