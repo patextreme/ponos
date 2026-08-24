@@ -26,9 +26,16 @@ Fan out over many targets with a concurrency cap:
 
 ```lua
 local outcomes = ponos.parallel(targets, function(t)
-    return s:prompt("Summarize " .. t)
+    local s = claude:session()
+    local r = s:prompt("Summarize " .. t)
+    s:close()
+    return r.text
 end, { concurrency = 2 })
 ```
+
+Turns on a single session serialize — a `prompt` issued while a turn is in
+flight waits for it — so overlapping fan-outs give each lane its own session;
+the concurrency cap then bounds concurrent agent subprocesses.
 
 ## Install / build
 
@@ -147,7 +154,7 @@ never hang.
 | --- | --- |
 | `ponos.agent(name_or_spec)` | Agent factory (registry name or inline `{command=, args=, env=}` spec) |
 | `agent:session({id=, cwd=, mcpServers=, resultSchema=, config=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `resultSchema` declares a typed-result contract (see below); `config` sets session config options at creation (see below) |
-| `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`result` is the turn's typed-result value, `nil` without one; `__tostring` → text; `text` is the turn's last agent message — see below) |
+| `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`result` is the turn's typed-result value, `nil` without one; `__tostring` → text; `text` is the turn's last agent message — see below); concurrent `prompt` calls on one session queue behind the in-flight turn |
 | `session:cancel()` | Cancels the in-flight turn (returns `stopReason = "cancelled"`) |
 | `session:close()` | Ends the session and reaps the agent process |
 | `session:configOptions()` | Live per-session config options (empty table when the agent offers none) |

@@ -48,7 +48,7 @@ The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an age
 - **THEN** a Lua error is raised naming the unresolved agent
 
 ### Requirement: Prompt returns a result table
-`session:prompt(text, options?)` SHALL send one prompt turn and return a table with `text` (the turn's last agent message), `stopReason` (`"end_turn"`, `"max_tokens"`, `"max_turn_requests"`, `"refusal"`, or `"cancelled"`), `usage` (`input`, `cacheRead`, `cacheWrite`, `output` token counts, zero when unreported), and `result` (the turn's last accepted typed submission converted to a Luau value; `nil` when the session declared no contract or the turn had no accepted submission — the field's semantics are specified by the typed-results capability). The result table SHALL be directly string-coercible to `text` via `__tostring`. Options SHALL accept `timeoutMs`.
+`session:prompt(text, options?)` SHALL send one prompt turn and return a table with `text` (the turn's last agent message), `stopReason` (`"end_turn"`, `"max_tokens"`, `"max_turn_requests"`, `"refusal"`, or `"cancelled"`), `usage` (`input`, `cacheRead`, `cacheWrite`, `output` token counts, zero when unreported), and `result` (the turn's last accepted typed submission converted to a Luau value; `nil` when the session declared no contract or the turn had no accepted submission — the field's semantics are specified by the typed-results capability). The result table SHALL be directly string-coercible to `text` via `__tostring`. Options SHALL accept `timeoutMs`. Prompt turns on a single session SHALL be serialized: a `prompt` call issued while a turn is in flight on that session SHALL wait for that turn to complete before its own turn begins, so turns never interleave on one session. Distinct sessions are unaffected.
 
 `text` SHALL be the last agent message of the turn: the final contiguous run of agent message text, where tool-call activity (`tool_call` and `tool_call_update` updates) terminates the current message run. When a turn ends with no message after its last tool-call activity, `text` SHALL fall back to the previous non-empty message run of that turn; when a turn produces no agent message at all, `text` SHALL be the empty string. When a turn completes with `stopReason == "cancelled"`, `text` SHALL be the empty string. Text from one turn SHALL never appear in a subsequent turn's `text` on the same session, whatever the previous turn's outcome. Streaming display of intermediate messages is unaffected: every message chunk is still surfaced by the live renderer as it arrives.
 
@@ -76,6 +76,10 @@ The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an age
 - **WHEN** `s:prompt("...", { timeoutMs = 50 })` exceeds its timeout
 - **THEN** the turn is cancelled via `session/cancel` and the call raises a catchable Lua timeout error
 
+#### Scenario: Turns on one session serialize
+- **WHEN** a second `s:prompt(...)` is called while a turn is in flight on the same session
+- **THEN** the second turn begins only after the in-flight turn completes
+
 ### Requirement: Cancellation is control flow, not failure
 `session:cancel()` SHALL be callable while another task is blocked in `prompt` on that session; it sends `session/cancel`, and the awaiting `prompt` returns normally with `stopReason = "cancelled"` rather than raising.
 
@@ -87,8 +91,8 @@ The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an age
 The `ponos` namespace SHALL provide: `ponos.spawn(fn)` returning a Task object with `:await()`, `ponos.join({task, ...})` waiting for all tasks, `ponos.parallel(items, fn, options?)` running `fn` per item with optional `concurrency` limit (default unlimited) and returning per-item outcome entries, and `ponos.sleep(ms)`. Awaiting an errored task SHALL re-raise its error at the await site. `ponos.parallel` results SHALL carry each item's success value or error without throwing wholesale. A task error is delivered when observed via `:await()`, `join`, or carried in `ponos.parallel` results, whether or not the script catches or inspects it; a task error never delivered by script end SHALL fail the run (error to stderr, non-zero exit).
 
 #### Scenario: Parallel fan-out
-- **WHEN** `ponos.parallel({1,2,3}, function(i) return s:prompt("q"..i) end)` runs
-- **THEN** all three prompts execute concurrently and results arrive in item order
+- **WHEN** `ponos.parallel({1,2,3}, function(i) return agent:session():prompt("q"..i) end)` runs
+- **THEN** all three turns execute concurrently, each on its own session, and results arrive in item order
 
 #### Scenario: Concurrency cap
 - **WHEN** `ponos.parallel(items, fn, { concurrency = 2 })` runs with 5 items
