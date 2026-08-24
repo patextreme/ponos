@@ -91,7 +91,7 @@ WHEN the main script chunk finishes while spawned tasks are still running, the p
 - **THEN** pending tasks and agent processes are torn down and the process exits with code 3
 
 ### Requirement: Uncaught script error fails the run
-WHEN a script error escapes the main chunk uncaught, ponos SHALL cancel all in-flight prompt turns, terminate all agent subprocesses, print the error to stderr, and exit with a non-zero code. A task error that is never delivered to the script is treated the same way at script end: after all outstanding tasks complete, any task whose error was never observed (via `:await()`, `join`, or as a value in `ponos.map` results) SHALL fail the run with that error printed to stderr and a non-zero exit code — unless the script already terminated via `ponos.exit`, whose code wins.
+WHEN a script error escapes the main chunk uncaught, ponos SHALL cancel all in-flight prompt turns, terminate all agent subprocesses, print the error to stderr, and exit with a non-zero code. A task error that is never delivered to the script is treated the same way at script end: after all outstanding tasks complete, any task whose error was never observed (via `:await()`, `join`, or as a value in `ponos.parallel` results) SHALL fail the run with that error printed to stderr and a non-zero exit code — unless the script already terminated via `ponos.exit`, whose code wins.
 
 #### Scenario: Error propagation
 - **WHEN** a spawned task raises and the script awaits it without catching

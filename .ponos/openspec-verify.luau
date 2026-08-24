@@ -1,8 +1,8 @@
 --!strict
 
 const DEFAULT_MODEL = "zai/glm-5.3"
-const JUDGE_MODEL = "zai-coding-plan/glm-5.3"
-const CHANGE_NAME = "add-check-subcommand"
+const JUDGE_MODEL = "qwencloud/deepseek-v4-flash-0731"
+const CHANGE_NAME = "prompt-text-last-message"
 
 local predicateAgent = require("./predicate")
 
@@ -30,7 +30,7 @@ while true do
 		`For the critical and warning severity findings, do you know how to resolve them, or do you need human input?`
 	)
 	if
-		not predicateAgent(
+		predicateAgent(
 			"The verification result required human input to resolve",
 			needHumanResult.text,
 			{ sessionId = `judge-human:{iteration}`, model = JUDGE_MODEL }

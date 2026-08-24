@@ -3,7 +3,8 @@
 //! protocol shared by ponos-main and the hidden `ponos __bridge`
 //! subcommand.
 //!
-//! A session that declares `agent:session({ result = <schema> })` compiles
+//! A session that declares `agent:session({ resultSchema = <schema> })`
+//! compiles
 //! the schema eagerly (author errors fail at the author's line, and remote
 //! `$ref`s are rejected so runs stay offline), binds a per-session socket,
 //! and offers the agent an MCP server (the bridge) whose single

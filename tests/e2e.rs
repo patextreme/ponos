@@ -545,3 +545,52 @@ ponos.sleep(3000)
     assert_eq!(out.code, 0, "error: {:?}", out.error);
     assert_eq!(count_processes(&token), 0, "no process may survive the run");
 }
+
+#[test]
+fn closing_one_session_keeps_same_label_survivor_in_the_run_end_sweep() {
+    // Two factories for the same agent name both label their first
+    // session `mock/s1` (scripting spec "Independent factories"), and
+    // the session registry is the run-end teardown list — removal must
+    // be by identity (pid), never by label, or closing one sibling
+    // unregisters the survivor too. The survivor's mock parks on stdin
+    // EOF (MOCK_EOF_LINGER), so EOF can never be the reaper here: the
+    // sweep must explicitly kill the process group. (Today the driver's
+    // last-handle-drop reap backstops a registry miss — this test keeps
+    // that contract observable end-to-end instead of relying on it.)
+    let dir = tmpdir("close-shared-label");
+    let token_a = format!("--ponos-e2e-close-a-{}", std::process::id());
+    let token_b = format!("--ponos-e2e-close-b-{}", std::process::id());
+    let script = write_script(
+        &dir,
+        &format!(
+            r#"
+local a = ponos.agent({{ command = "{mock}", args = {{ "{token_a}" }} }})
+local b = ponos.agent({{ command = "{mock}", args = {{ "{token_b}" }}, env = {{ MOCK_EOF_LINGER = "1" }} }})
+local sa = a:session()
+local sb = b:session()
+assert(sa:label() == sb:label(), "both sessions must share a label for this regression")
+sa:close()
+ponos.sleep(2000)
+local r = sb:prompt("hi")
+assert(type(r.text) == "string", "survivor must stay usable after the sibling close")
+"#,
+            mock = mock_agent(),
+            token_a = token_a,
+            token_b = token_b
+        ),
+    );
+    let run_dir = dir.clone();
+    let run_script = script.clone();
+    let runner = std::thread::spawn(move || run(&run_script, &run_dir));
+    wait_for_processes(&token_a, 0, "closed session reaped by close()");
+    wait_for_processes(&token_b, 1, "same-label survivor alive mid-run");
+    assert!(
+        !runner.is_finished(),
+        "observation must happen while the script is still running"
+    );
+    let out = runner.join().unwrap();
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+    // The script never closed the survivor: the run-end sweep must reap
+    // it even though a same-label sibling was closed earlier.
+    wait_for_processes(&token_b, 0, "survivor reaped by the run-end sweep");
+}

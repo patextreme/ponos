@@ -294,6 +294,115 @@ async fn two_sessions_are_independent_processes() {
 const MODEL_OPTIONS_JSON: &str = r#"[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"opus","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]},{"id":"fast","name":"Fast mode","type":"boolean","currentValue":false}]"#;
 
 #[tokio::test]
+async fn prompt_text_is_last_message_after_tool_use() {
+    // scripting spec "Last message after tool use": the mock streams a
+    // lead message (MOCK_LEAD_CHUNKS), runs tool activity (MOCK_TOOL),
+    // then streams the final message (MOCK_CHUNKS) — the turn's text is
+    // the final message only, without the preamble glued in front.
+    let mut spec = mock_agent_spec();
+    spec.env
+        .insert("MOCK_LEAD_CHUNKS".into(), "Let me check that. ".into());
+    spec.env.insert("MOCK_TOOL".into(), "1".into());
+    spec.env
+        .insert("MOCK_CHUNKS".into(), "The bug is on line 3".into());
+    let session = start_session(&spec, opts("mock/last-msg"), quiet_renderer())
+        .await
+        .expect("session starts");
+    let outcome = session
+        .prompt("find the bug".into(), None)
+        .await
+        .expect("turn completes");
+    assert_eq!(outcome.text, "The bug is on line 3");
+    assert_eq!(outcome.stop_reason, "end_turn");
+    session.close();
+    session.join().await;
+}
+
+#[tokio::test]
+async fn prompt_text_falls_back_when_turn_ends_on_tool_activity() {
+    // scripting spec "Turn ends on tool activity": a lead message, tool
+    // activity, then an (empty) final message — the empty final chunk
+    // keeps the fallback rule honest; the lead message is the turn's
+    // last agent message.
+    let mut spec = mock_agent_spec();
+    spec.env
+        .insert("MOCK_LEAD_CHUNKS".into(), "Running the checks now".into());
+    spec.env.insert("MOCK_TOOL".into(), "1".into());
+    spec.env.insert("MOCK_CHUNKS".into(), String::new());
+    let session = start_session(&spec, opts("mock/fallback"), quiet_renderer())
+        .await
+        .expect("session starts");
+    let outcome = session
+        .prompt("do work".into(), None)
+        .await
+        .expect("turn completes");
+    assert_eq!(outcome.text, "Running the checks now");
+    session.close();
+    session.join().await;
+}
+
+#[tokio::test]
+async fn cancelled_turn_discards_text_and_leaks_nothing_into_next_turn() {
+    // scripting spec "Cancelled turn has empty text" + "No text leaks
+    // across turns": turn 1 streams one chunk ("partial x") then is
+    // cancelled mid-stream — its outcome carries empty text; turn 2 on
+    // the same session completes with exactly its own message.
+    let mut spec = mock_agent_spec();
+    spec.env
+        .insert("MOCK_CHUNKS".into(), "partial x|y|z".into());
+    spec.env.insert("MOCK_DELAY_MS".into(), "100".into());
+    let session = start_session(&spec, opts("mock/cancel-text"), quiet_renderer())
+        .await
+        .expect("session starts");
+
+    let s2 = session.clone();
+    let pending = tokio::spawn(async move { s2.prompt("slow".into(), None).await });
+    // The mock sleeps before each chunk: "partial x" has streamed by now,
+    // "y" (due ~200 ms) has not.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    session.cancel();
+    let outcome = pending.await.unwrap().expect("cancel is not an error");
+    assert_eq!(outcome.stop_reason, "cancelled");
+    assert_eq!(outcome.text, "", "cancelled turns discard partial text");
+
+    let outcome = session
+        .prompt("clean".into(), None)
+        .await
+        .expect("follow-up turn completes");
+    assert_eq!(outcome.text, "partial xyz");
+    session.close();
+    session.join().await;
+}
+
+#[tokio::test]
+async fn timed_out_turn_leaks_no_text_into_next_turn() {
+    // scripting spec "No text leaks across turns" (timeout flavor): the
+    // error path (TurnError::Timeout) drains the fold too — the next
+    // turn's text starts from scratch. MOCK_DELAY_MS stretches the turn
+    // past the timeout so partial text has streamed before the cancel.
+    let mut spec = mock_agent_spec();
+    spec.env
+        .insert("MOCK_CHUNKS".into(), "drip|drip|drip".into());
+    spec.env.insert("MOCK_DELAY_MS".into(), "100".into());
+    let session = start_session(&spec, opts("mock/timeout-text"), quiet_renderer())
+        .await
+        .expect("session starts");
+    let err = session
+        .prompt("slow".into(), Some(Duration::from_millis(150)))
+        .await
+        .expect_err("must time out");
+    assert!(matches!(err, TurnError::Timeout), "{err:?}");
+
+    let outcome = session
+        .prompt("clean".into(), None)
+        .await
+        .expect("follow-up turn completes");
+    assert_eq!(outcome.text, "dripdripdrip");
+    session.close();
+    session.join().await;
+}
+
+#[tokio::test]
 async fn handshake_advertises_config_option_capability() {
     // The mock agent asserts on every `initialize` that the client
     // advertises `session.configOptions` (with its `boolean`

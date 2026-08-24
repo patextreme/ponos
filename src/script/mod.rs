@@ -217,10 +217,15 @@ fn new_session_obj(lua: &Lua, handle: SessionHandle) -> mlua::Result<Table> {
                 let state = runtime_state(&lua)?;
                 handle.close();
                 handle.join().await;
+                // Remove by pid (session identity), not label: two
+                // factories for one agent name can have live sessions
+                // sharing a label, and this registry is the run-end
+                // teardown list — a label match would unregister the
+                // survivor and strand its subprocess.
                 state
                     .sessions
                     .borrow_mut()
-                    .retain(|s| s.label != handle.label);
+                    .retain(|s| s.pid != handle.pid);
                 Ok(())
             }
         })?,
@@ -413,10 +418,13 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                     if let Err(e) = handle.set_config(id, value).await {
                         handle.close();
                         handle.join().await;
+                        // Same identity rule as close(): pid, not label,
+                        // so a same-label sibling stays registered for
+                        // the run-end sweep.
                         state
                             .sessions
                             .borrow_mut()
-                            .retain(|s| s.label != handle.label);
+                            .retain(|s| s.pid != handle.pid);
                         return Err(mlua::Error::runtime(e));
                     }
                 }

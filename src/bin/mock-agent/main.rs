@@ -5,6 +5,10 @@
 //!
 //! - `MOCK_CHUNKS`      — `|`-separated chunks streamed per prompt
 //!   (default: echo the prompt text as one chunk)
+//! - `MOCK_LEAD_CHUNKS` — `|`-separated chunks streamed at turn start,
+//!   after client-request probes and before tool activity: the fixture
+//!   for narrate → act → answer turns (final `r.text` keeps only the
+//!   last message)
 //! - `MOCK_DELAY_MS`    — delay between streamed chunks (default 0)
 //! - `MOCK_USAGE`       — comma list `used,size,in,out,cache_read,cache_write`:
 //!   emits a `usage_update` during the turn and carries
@@ -64,6 +68,9 @@
 //! - `MOCK_CONFIG_REJECT_DELAY_MS` — with `MOCK_CONFIG_REJECT`, hold the
 //!   rejection response for this many milliseconds first (keeps the agent
 //!   process observably alive mid-handshake; constructor-teardown tests)
+//! - `MOCK_EOF_LINGER` — park forever after the ACP connection ends
+//!   instead of exiting, so only an explicit teardown reap (never stdin
+//!   EOF) ends the process (run-end sweep tests)
 //! - `MOCK_CONFIG_UPDATE` — JSON array of options: after the first
 //!   prompt completes, push a `config_option_update` (`session/update`
 //!   payload) carrying the new full option set and apply it to the
@@ -482,6 +489,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
     builder.connect_to(Stdio::new()).await?;
+    // MOCK_EOF_LINGER: park after the connection ends instead of exiting,
+    // so a missed teardown leaves a live process tests can observe (ponos
+    // kills the whole process group explicitly; EOF alone never reaps
+    // this mode).
+    if env_flag("MOCK_EOF_LINGER") {
+        std::future::pending::<()>().await;
+    }
     // The ACP connection ended: tear the spawned MCP servers down with the
     // session before the runtime goes away.
     mcp.shutdown().await;
@@ -623,6 +637,33 @@ async fn run_prompt(
                 }
                 Err(_) => {} // transport gone: proceed
             }
+        }
+    }
+
+    // Lead message: streamed at turn start, before any tool activity,
+    // so tests can script the narrate → act → answer turn shape
+    // (MOCK_LEAD_CHUNKS). Same delay/cancel discipline as the final
+    // message below.
+    if let Some(lead) = std::env::var("MOCK_LEAD_CHUNKS")
+        .ok()
+        .filter(|l| !l.is_empty())
+    {
+        for chunk in lead.split('|') {
+            if turn.cancelled.load(Ordering::SeqCst) {
+                return respond_cancelled(responder);
+            }
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            if turn.cancelled.load(Ordering::SeqCst) {
+                return respond_cancelled(responder);
+            }
+            cx.send_notification(SessionNotification::new(
+                session_id.clone(),
+                SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                    TextContent::new(chunk),
+                ))),
+            ))?;
         }
     }
 

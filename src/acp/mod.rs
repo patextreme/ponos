@@ -15,7 +15,7 @@
 //! allow-all selection (prefer `AllowAlways`, else the first other allow
 //! option) registered below it.
 //!
-//! Sessions with a typed result contract (`agent:session({ result = … })`)
+//! Sessions with a typed result contract (`agent:session({ resultSchema = … })`)
 //! additionally bind a per-session Unix-domain result channel and offer
 //! the agent the `ponos __bridge` MCP server in `session/new`; accepted
 //! submissions land in the in-flight turn's slot and ride out on
@@ -73,7 +73,11 @@ impl UsageCounts {
 /// The result of one completed prompt turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnOutcome {
-    /// Final agent message text (assembled from chunks).
+    /// The turn's last agent message: the final contiguous run of streamed
+    /// text, where tool-call activity ends a message run. Falls back to
+    /// the previous non-empty run when the turn ends on tool activity
+    /// with no trailing message; empty for cancelled and message-less
+    /// turns. Intermediate messages still stream to the renderer.
     pub text: String,
     /// `end_turn` | `max_tokens` | `max_turn_requests` | `refusal` | `cancelled`.
     pub stop_reason: String,
@@ -164,7 +168,12 @@ enum SessionCmd {
 /// loop (in wire order, before the response is delivered).
 #[derive(Default)]
 struct TurnFold {
+    /// The turn's current message run: text streamed since the last
+    /// tool-call activity (see `break_message`).
     text: String,
+    /// The turn's last completed non-empty message run — the fallback
+    /// when a turn ends on tool activity with no trailing message.
+    prev_text: String,
     /// Whether a turn is currently in flight (submissions landing outside
     /// a turn are dropped as late).
     in_flight: bool,
@@ -177,22 +186,40 @@ struct TurnFold {
 }
 
 impl TurnFold {
-    /// A turn starts: a fresh slot, so a turn never observes the previous
-    /// turn's value.
+    /// A turn starts: fresh text and a fresh slot, so a turn never
+    /// observes the previous turn's state.
     fn begin_turn(&mut self) {
         self.in_flight = true;
+        self.text.clear();
+        self.prev_text.clear();
         self.result = None;
     }
 
-    /// A turn settles: returns the accepted submission, or discards it
-    /// (cancelled / timed-out / failed turns keep `None`).
-    fn settle_turn(&mut self, discard: bool) -> Option<serde_json::Value> {
+    /// Tool-call activity ends the current message run: the run, when
+    /// non-empty, becomes the last completed run. An agent that emits a
+    /// tool call has, by construction, finished speaking, so tool updates
+    /// are the only message boundary.
+    fn break_message(&mut self) {
+        if !self.text.is_empty() {
+            self.prev_text = std::mem::take(&mut self.text);
+        }
+    }
+
+    /// A turn settles: returns the turn's text — the current message
+    /// run, falling back to the last completed non-empty run when the
+    /// turn ends on tool activity with no trailing message — and the
+    /// accepted submission. Both fields are drained; `discard` (a
+    /// cancelled, timed-out, or failed turn) yields empty text and no
+    /// submission.
+    fn settle_turn(&mut self, discard: bool) -> (String, Option<serde_json::Value>) {
         self.in_flight = false;
+        let text = std::mem::take(&mut self.text);
+        let prev_text = std::mem::take(&mut self.prev_text);
+        let submission = self.result.take();
         if discard {
-            self.result.take();
-            None
+            (String::new(), None)
         } else {
-            self.result.take()
+            (if text.is_empty() { prev_text } else { text }, submission)
         }
     }
 }
@@ -854,17 +881,17 @@ async fn run_turn(
     let resp = match response {
         Ok(resp) => resp,
         Err(e) => {
-            // Cancelled / timed out / failed: any submission the turn had
-            // gathered is discarded.
-            fold.lock().unwrap().settle_turn(true);
+            // Cancelled / timed out / failed: the turn's text and any
+            // submission it had gathered are discarded (settle drains both
+            // so nothing leaks into the next turn on this session).
+            let _ = fold.lock().unwrap().settle_turn(true);
             return Err(e);
         }
     };
     let stop_reason = stop_reason_string(&resp.stop_reason);
-    let text = std::mem::take(&mut fold.lock().unwrap().text);
-    // A cancelled turn discards its submission; any other completion
-    // carries the last accepted one.
-    let result = fold.lock().unwrap().settle_turn(stop_reason == "cancelled");
+    // A cancelled turn's partial text is as unreliable as its discarded
+    // submission; any other completion settles normally.
+    let (text, result) = fold.lock().unwrap().settle_turn(stop_reason == "cancelled");
     Ok(TurnOutcome {
         text,
         stop_reason,
@@ -890,31 +917,41 @@ fn fold_update(
             content: ContentBlock::Text(t),
             ..
         }) => {
-            fold.lock().unwrap().text.push_str(&t.text);
+            let mut fold = fold.lock().unwrap();
+            fold.text.push_str(&t.text);
+            drop(fold);
             renderer.event(label, DisplayEvent::Chunk(t.text));
         }
         SessionUpdate::AgentMessageChunk(_) => {}
         SessionUpdate::ToolCall(call) => {
-            let body = fold.lock().unwrap().tools.announce(
-                &call.tool_call_id.0,
-                &call.title,
-                &status_string(&call.status),
-                Instant::now(),
-            );
+            let body = {
+                let mut fold = fold.lock().unwrap();
+                fold.break_message();
+                fold.tools.announce(
+                    &call.tool_call_id.0,
+                    &call.title,
+                    &status_string(&call.status),
+                    Instant::now(),
+                )
+            };
             if let Some(body) = body {
                 renderer.event(label, DisplayEvent::Tool(body));
             }
         }
         SessionUpdate::ToolCallUpdate(update) => {
-            if let Some(status) = update.fields.status {
-                let body = fold.lock().unwrap().tools.update_status(
-                    &update.tool_call_id.0,
-                    &status_string(&status),
-                    Instant::now(),
-                );
-                if let Some(body) = body {
-                    renderer.event(label, DisplayEvent::Tool(body));
-                }
+            let body = {
+                let mut fold = fold.lock().unwrap();
+                fold.break_message();
+                update.fields.status.and_then(|status| {
+                    fold.tools.update_status(
+                        &update.tool_call_id.0,
+                        &status_string(&status),
+                        Instant::now(),
+                    )
+                })
+            };
+            if let Some(body) = body {
+                renderer.event(label, DisplayEvent::Tool(body));
             }
         }
         SessionUpdate::Plan(plan) => {
@@ -1203,19 +1240,97 @@ mod tests {
         assert!(fold.in_flight && fold.result.is_none());
         fold.result = Some(serde_json::json!({"n": 1}));
         fold.result = Some(serde_json::json!({"n": 2}));
-        assert_eq!(fold.settle_turn(false), Some(serde_json::json!({"n": 2})));
+        assert_eq!(
+            fold.settle_turn(false),
+            (String::new(), Some(serde_json::json!({"n": 2})))
+        );
         assert!(!fold.in_flight && fold.result.is_none());
 
         // Fresh slot per turn: a second turn without submissions yields
         // None even though the first turn had one.
         fold.begin_turn();
-        assert_eq!(fold.settle_turn(false), None);
+        assert_eq!(fold.settle_turn(false), (String::new(), None));
 
         // Discard on cancelled/failed turns.
         fold.begin_turn();
         fold.result = Some(serde_json::json!({"n": 3}));
-        assert_eq!(fold.settle_turn(true), None);
+        assert_eq!(fold.settle_turn(true), (String::new(), None));
         assert!(!fold.in_flight && fold.result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Turn-text fold: last message wins, fallback, discard, no leak
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn turn_fold_last_message_run_wins() {
+        // chunks → tool → chunks settles to the last run only.
+        let mut fold = TurnFold::default();
+        fold.begin_turn();
+        fold.text.push_str("Lead preamble. ");
+        fold.break_message();
+        fold.text.push_str("Final");
+        fold.text.push_str(" answer.");
+        let (text, _) = fold.settle_turn(false);
+        assert_eq!(text, "Final answer.");
+    }
+
+    #[test]
+    fn turn_falls_back_to_previous_run_when_final_is_empty() {
+        // chunks → tool with no trailing message: the earlier run is the
+        // turn's last agent message.
+        let mut fold = TurnFold::default();
+        fold.begin_turn();
+        fold.text.push_str("The bug is on line 3");
+        fold.break_message();
+        // Turn ends on tool activity (no chunks after it). An empty
+        // current run never clobbers the completed one.
+        fold.break_message();
+        let (text, _) = fold.settle_turn(false);
+        assert_eq!(text, "The bug is on line 3");
+    }
+
+    #[test]
+    fn turn_without_any_message_settles_empty() {
+        let mut fold = TurnFold::default();
+        fold.begin_turn();
+        fold.break_message();
+        let (text, _) = fold.settle_turn(false);
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn settle_discard_empties_text() {
+        // A cancelled turn's partial text is discarded with its submission.
+        let mut fold = TurnFold::default();
+        fold.begin_turn();
+        fold.text.push_str("partial");
+        fold.result = Some(serde_json::json!(1));
+        assert_eq!(fold.settle_turn(true), (String::new(), None));
+        assert!(fold.text.is_empty() && fold.prev_text.is_empty());
+
+        // Even the fallback run is drained by a discarding settle.
+        fold.begin_turn();
+        fold.text.push_str("seen");
+        fold.break_message();
+        assert_eq!(fold.settle_turn(true).0, "");
+    }
+
+    #[test]
+    fn settled_fold_never_leaks_into_next_turn() {
+        let mut fold = TurnFold::default();
+        fold.begin_turn();
+        fold.text.push_str("first turn");
+        fold.break_message();
+        fold.text.push_str("tail");
+        assert_eq!(fold.settle_turn(false).0, "tail");
+
+        // A second turn on the same fold starts clean — even with no
+        // messages of its own, and even if it, too, ends on tool
+        // activity (the fallback path).
+        fold.begin_turn();
+        fold.break_message();
+        assert_eq!(fold.settle_turn(false).0, "");
     }
 
     // -----------------------------------------------------------------------

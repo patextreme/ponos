@@ -147,7 +147,7 @@ never hang.
 | --- | --- |
 | `ponos.agent(name_or_spec)` | Agent factory (registry name or inline `{command=, args=, env=}` spec) |
 | `agent:session({id=, cwd=, mcpServers=, resultSchema=, config=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `resultSchema` declares a typed-result contract (see below); `config` sets session config options at creation (see below) |
-| `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`result` is the turn's typed-result value, `nil` without one; `__tostring` → text) |
+| `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`result` is the turn's typed-result value, `nil` without one; `__tostring` → text; `text` is the turn's last agent message — see below) |
 | `session:cancel()` | Cancels the in-flight turn (returns `stopReason = "cancelled"`) |
 | `session:close()` | Ends the session and reaps the agent process |
 | `session:configOptions()` | Live per-session config options (empty table when the agent offers none) |
@@ -156,6 +156,21 @@ never hang.
 | `ponos.join({task, …})` | Wait for tasks → per-task `{ok, value}` / `{ok=false, error}` entries |
 | `ponos.parallel(items, fn, {concurrency=})` | Parallel fan-out (default unlimited) → per-item outcome entries in item order |
 | `ponos.sleep(ms)` / `ponos.log(msg)` / `ponos.exit(code)` / `ponos.version` | Runtime helpers |
+
+### Prompt text
+
+`r.text` is the turn's **last agent message** — the final contiguous run
+of streamed message text, where tool-call activity (`tool_call` /
+`tool_call_update`) ends a message run. An agent that narrates ("Let me
+check that file…"), runs tools, then answers ("The bug is on line 3")
+yields only the answer in `r.text`, so `tostring(r)` reads as the reply;
+the narration still streams to the terminal as it arrives. When a turn
+ends on tool activity with no message after it, `r.text` falls back to
+the turn's previous non-empty message; a turn with no agent message at
+all yields `""`. A cancelled turn's `r.text` is `""` (its partial text
+is as unreliable as its discarded typed result), and text from an
+aborted turn never leaks into a later turn's `r.text` on the same
+session.
 
 ### Typed results
 

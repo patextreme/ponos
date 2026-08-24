@@ -7,14 +7,14 @@ Lets scripts declare a typed result contract per agent session and receive a val
 ## Requirements
 
 ### Requirement: Result contract declaration
-`agent:session(options)` SHALL accept a `result` option whose value is a JSON Schema expressed as a Luau table. The schema SHALL be compiled at session-creation time; a schema that fails to compile SHALL raise a Lua error at the `session()` call site naming the compile failure. Schemas containing a remote `$ref` (a reference that is not a local JSON pointer within the same document) SHALL be rejected at the same point, so runs stay offline. Sessions created without `result` SHALL behave exactly as before, with no injected tool and no prompt augmentation.
+`agent:session(options)` SHALL accept a `resultSchema` option whose value is a JSON Schema expressed as a Luau table. The schema SHALL be compiled at session-creation time; a schema that fails to compile SHALL raise a Lua error at the `session()` call site naming the compile failure. Schemas containing a remote `$ref` (a reference that is not a local JSON pointer within the same document) SHALL be rejected at the same point, so runs stay offline. Sessions created without `resultSchema` SHALL behave exactly as before, with no injected tool and no prompt augmentation. A `result` option SHALL NOT be read: a script passing the former name declares no contract, and the session behaves as a plain session.
 
 #### Scenario: Valid schema accepted
-- **WHEN** `session({ result = { type = "object", properties = { verdict = { type = "string" } }, required = { "verdict" } } })` is called
+- **WHEN** `session({ resultSchema = { type = "object", properties = { verdict = { type = "string" } }, required = { "verdict" } } })` is called
 - **THEN** the session is created and the schema governs all prompts on it
 
 #### Scenario: Invalid schema fails at the author's line
-- **WHEN** `session({ result = { type = "objekt" } })` is called
+- **WHEN** `session({ resultSchema = { type = "objekt" } })` is called
 - **THEN** a Lua error is raised from the `session()` call naming the schema problem
 
 #### Scenario: Remote reference rejected
@@ -22,8 +22,12 @@ Lets scripts declare a typed result contract per agent session and receive a val
 - **THEN** a Lua error is raised from the `session()` call, before any agent subprocess is spawned
 
 #### Scenario: Any root schema shape
-- **WHEN** `result` is a non-object schema such as `{ type = "string", enum = { "ship", "block" } }`
+- **WHEN** `resultSchema` is a non-object schema such as `{ type = "string", enum = { "ship", "block" } }`
 - **THEN** the session accepts it and submissions are strings, not wrapped objects
+
+#### Scenario: Legacy option name is not read
+- **WHEN** `session({ result = { type = "object" } })` is called
+- **THEN** the session is created as a plain session: no contract, no injected tool, and prompt outcomes carry a `nil` `result` field
 
 ### Requirement: Submit tool injection
 When `result` is set, session creation SHALL offer the agent one additional MCP server over stdio, named `ponos`, exposing exactly one tool named `result_submit`. The tool's input schema SHALL be the declared schema wrapped under a single `value` property, so the declared schema reaches the model through the tool itself. The tool's description SHALL tell the agent to call it with its final result as `value` when its work is complete. Prompt text on a result session SHALL be passed through verbatim: ponos SHALL NOT append instructions to, or otherwise modify, the script's prompt. The schema SHALL NOT be inlined into prompt text. The injected server SHALL NOT change sessions that declare no `result`.
