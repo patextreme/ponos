@@ -1,5 +1,7 @@
 --!strict
 
+local oc: Agent = ponos.agent("opencode")
+
 export type PredicateOptions = {
   sessionId: string,
   model: string,
@@ -29,8 +31,6 @@ end
 -- Ask a small/fast agent whether `predicate` holds for `payload`.
 -- Returns the verdict once the agent responds with a typed boolean.
 local function predicateAgent(predicate: string, payload: string, options: PredicateOptions): boolean
-  local oc: Agent = ponos.agent("opencode")
-
   local verdict
   repeat
     local session: Session = oc:session({
