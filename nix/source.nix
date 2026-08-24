@@ -26,6 +26,10 @@
     ponosSrc = pkgs.lib.cleanSourceWith {
       src = ../.;
       filter = path: type:
+        # Local runtime state and tooling configs — read from the
+        # invocation dir at run time, never compile inputs. Keeping them
+        # out of the source means `nix run .` does not rebuild when local
+        # .ponos scripts/config (or editor/agent scaffolding) change.
         !(pkgs.lib.elem (baseNameOf path) [
           ".git"
           "target"
@@ -35,6 +39,9 @@
           "result"
           ".direnv"
           "worktrees"
+          ".ponos"
+          ".agents"
+          ".helix"
         ]);
     };
   };
