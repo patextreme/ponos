@@ -1,3 +1,5 @@
+--!strict
+
 const DEFAULT_MODEL = "zai/glm-5.3"
 const SMALL_MODEL = "qwencloud/deepseek-v4-flash-0731"
 const CHANGE_NAME = "revise-script-api"
@@ -32,8 +34,7 @@ while true do
 			{ sessionId = `judge-human:{iteration}`, model = SMALL_MODEL }
 		)
 	then
-		ponos.log("The change needs human input to resolve the issue")
-		ponos.exit(1)
+		error("The change needs human input to resolve the issue")
 	end
 
 	local fixResult = reviewer:prompt("Go ahead and resolve the blockers")

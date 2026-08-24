@@ -1,5 +1,7 @@
+--!strict
+
 const DEFAULT_MODEL = "zai/glm-5.3"
-const SMALL_MODEL = "qwencloud/deepseek-v4-flash-0731"
+const JUDGE_MODEL = "zai-coding-plan/glm-5.3"
 const CHANGE_NAME = "add-check-subcommand"
 
 local predicateAgent = require("./predicate")
@@ -17,7 +19,7 @@ while true do
 		predicateAgent(
 			"The verification does not contain critical findings or warnings.",
 			reviewResult.text,
-			{ sessionId = `judge-review:{iteration}`, model = SMALL_MODEL }
+			{ sessionId = `judge-review:{iteration}`, model = JUDGE_MODEL }
 		)
 	then
 		ponos.log("The change is ready to be synced and archived")
@@ -31,11 +33,10 @@ while true do
 		not predicateAgent(
 			"The verification result required human input to resolve",
 			needHumanResult.text,
-			{ sessionId = `judge-human:{iteration}`, model = SMALL_MODEL }
+			{ sessionId = `judge-human:{iteration}`, model = JUDGE_MODEL }
 		)
 	then
-		ponos.log("The change needs human input to resolve the issue")
-		ponos.exit(1)
+		error("The change needs human input to resolve the issue")
 	end
 
 	local fixResult = reviewer:prompt("Go ahead and resolve the blockers")
