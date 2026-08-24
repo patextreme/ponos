@@ -107,10 +107,11 @@ Session options (`agent:session({...})`; all optional):
   the sugar itself is not covered by the type definitions, so write
   `r.text` explicitly wherever the checker expects a `string` — implicit
   coercion (`r .. ""`, a `string`-typed binding) is a type error.
-- `stopReason` — typed as plain `string` (agents report it; the set is
-  open, not a closed enum). Known values: `"end_turn"`, `"max_tokens"`,
-  `"max_turn_requests"`, `"refusal"`, `"cancelled"` — keep an `else`
-  branch when branching on it.
+- `stopReason` — typed plain `string` (the checker won't enforce
+  exhaustiveness), but a script only ever observes these five values:
+  `"end_turn"`, `"max_tokens"`, `"max_turn_requests"`, `"refusal"`,
+  `"cancelled"`. ponos normalizes any unrecognized reason to
+  `"end_turn"` at the ACP boundary.
 - `usage` — `{ input, cacheRead, cacheWrite, output }` (zeros when
   unreported).
 - `result` — the turn's typed submission, or `nil` (see below).
@@ -310,9 +311,8 @@ so delete dead requires.
 ## Pitfall checklist
 
 - Missing `--!strict` on the entry (or a required module) → check finding.
-- Implicit `PromptResult`→`string` coercion under `--!strict` (`r .. ""`,
-  a `string`-typed binding) → type error — write `r.text` (`tostring(r)`
-  itself is fine).
+- Implicit `PromptResult`→`string` coercion under `--!strict` → type
+  error — write `r.text` (details under `PromptResult` above).
 - Sharing one session across `parallel` workers → turns silently serialize
   (turn lock); pool sessions instead.
 - `ponos.parallel` callback losing the item type → annotate the parameter
