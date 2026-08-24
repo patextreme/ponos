@@ -13,10 +13,9 @@ while true do
 	local reviewResult = reviewer:prompt(
 		`Verify the implementation of openspec change named {CHANGE_NAME} using the openspec-verify-change skill`
 	)
-	local reviewPredicatePrompt = "The verification does not contain critical findings or warnings."
 	if
 		predicateAgent(
-			reviewPredicatePrompt,
+			"The verification does not contain critical findings or warnings.",
 			reviewResult.text,
 			{ sessionId = `judge-review:{iteration}`, model = SMALL_MODEL }
 		)
@@ -28,10 +27,9 @@ while true do
 	local needHumanResult = reviewer:prompt(
 		`For the critical and warning severity findings, do you know how to resolve them, or do you need human input?`
 	)
-	local needHumanPredicatePrompt = "The verification result required human input to resolve"
 	if
 		not predicateAgent(
-			needHumanPredicatePrompt,
+			"The verification result required human input to resolve",
 			needHumanResult.text,
 			{ sessionId = `judge-human:{iteration}`, model = SMALL_MODEL }
 		)

@@ -12,10 +12,9 @@ while true do
 
 	local reviewResult =
 		reviewer:prompt(`Review the openspec change named {CHANGE_NAME} using the openspec-review skill`)
-	local reviewPredicatePrompot = "The review does not contain any blocker findings."
 	if
 		predicateAgent(
-			reviewPredicatePrompot,
+			"The review does not contain any blocker findings.",
 			reviewResult.text,
 			{ sessionId = `judge-review:{iteration}`, model = SMALL_MODEL }
 		)
@@ -26,10 +25,9 @@ while true do
 
 	local needHumanResult =
 		reviewer:prompt("For the blocker findings, do you know how to resolve them or do you need human input")
-	local needHumanPredicatePrompt = "The blocker findings are resolvable without human input"
 	if
 		not predicateAgent(
-			needHumanPredicatePrompt,
+			"The blocker findings are resolvable without human input",
 			needHumanResult.text,
 			{ sessionId = `judge-human:{iteration}`, model = SMALL_MODEL }
 		)
