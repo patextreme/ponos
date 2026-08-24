@@ -36,7 +36,7 @@ local function predicateAgent(predicate: string, payload: string, options: Predi
 		local session: Session = oc:session({
 			id = options.sessionId,
 			config = { model = options.model },
-			result = { type = "boolean" },
+			resultSchema = { type = "boolean" },
 		})
 		local promptResult = session:prompt(buildPrompt(predicate, payload))
 		verdict = promptResult.result :: boolean
