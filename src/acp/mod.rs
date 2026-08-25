@@ -29,22 +29,20 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     BooleanConfigOptionCapabilities, CancelNotification, ClientCapabilities,
     ClientSessionCapabilities, ContentBlock, ContentChunk, EnvVariable, InitializeRequest,
-    McpServer, McpServerStdio, NewSessionRequest,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionValue, SessionConfigOptionsCapabilities,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, StopReason, TextContent,
-    Usage,
+    McpServer, McpServerStdio, NewSessionRequest, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, StopReason, TextContent, Usage,
 };
 use agent_client_protocol::{AcpAgent, ByteStreams, Client, ConnectionTo};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::core::config::AgentSpec;
 use crate::core::contract::ResultContract;
-use crate::core::ports::select_allow_option;
-use crate::core::text::{LINE_BUDGET, truncate_visible};
+use crate::core::events::{PlanEntry, PlanStatus, SessionEvent};
+use crate::core::ports::{EventSink, select_allow_option};
 use crate::core::turn::{PeekInputs, TurnFold, status_string, submission_sink};
-use crate::render::{DisplayEvent, Renderer};
 use crate::result_wire::{bind_result_socket, spawn_result_channel};
 
 /// How long a timed-out prompt waits for the (cancelled) response before
@@ -165,7 +163,6 @@ enum SessionCmd {
     Close,
 }
 
-
 /// A handle from the scripting side to one live agent session.
 #[derive(Clone)]
 pub struct SessionHandle {
@@ -283,7 +280,7 @@ async fn kill_and_reap(mut child: async_process::Child) {
 pub async fn start_session(
     spec: &AgentSpec,
     opts: SessionOptions,
-    renderer: Arc<Renderer>,
+    sink: Arc<dyn EventSink>,
 ) -> Result<SessionHandle, SessionError> {
     let env = spec
         .env
@@ -304,13 +301,13 @@ pub async fn start_session(
     let pid = child.id();
 
     let stderr_label = opts.label.clone();
-    let stderr_renderer = renderer.clone();
+    let stderr_sink = sink.clone();
     let stderr_task = tokio::spawn(async move {
         use futures::AsyncBufReadExt;
         use futures::StreamExt;
         let mut lines = futures::io::BufReader::new(stderr).lines();
         while let Some(Ok(line)) = lines.next().await {
-            stderr_renderer.agent_stderr(&stderr_label, &line);
+            stderr_sink.emit(&stderr_label, SessionEvent::StderrLine { line });
         }
     });
 
@@ -339,14 +336,19 @@ pub async fn start_session(
                         listener,
                         contract.clone(),
                         submission_sink(fold.clone()),
-                        renderer.clone(),
+                        sink.clone(),
                         label.clone(),
                         cancel_tx,
                     );
-                    renderer.lifecycle(&format!(
-                        "{label}: typed-result contract active (socket {})",
-                        path.display()
-                    ));
+                    sink.emit(
+                        &label,
+                        SessionEvent::Lifecycle {
+                            message: format!(
+                                "{label}: typed-result contract active (socket {})",
+                                path.display()
+                            ),
+                        },
+                    );
                     mcp_servers.push(McpServer::Stdio(
                         McpServerStdio::new(crate::bridge::SERVER_NAME, exe)
                             .args(vec!["__bridge".to_string()])
@@ -357,22 +359,32 @@ pub async fn start_session(
                     ));
                     result_channel = Some(channel);
                 }
-                Err(e) => renderer.lifecycle(&format!(
-                    "{label}: typed results unavailable (cannot bind result socket: {e}); \
-                     prompts will return result = nil"
-                )),
+                Err(e) => sink.emit(
+                    &label,
+                    SessionEvent::Lifecycle {
+                        message: format!(
+                            "{label}: typed results unavailable (cannot bind result socket: {e}); \
+                             prompts will return result = nil"
+                        ),
+                    },
+                ),
             },
-            Err(e) => renderer.lifecycle(&format!(
-                "{label}: typed results unavailable (cannot resolve ponos executable: {e}); \
-                 prompts will return result = nil"
-            )),
+            Err(e) => sink.emit(
+                &label,
+                SessionEvent::Lifecycle {
+                    message: format!(
+                        "{label}: typed results unavailable (cannot resolve ponos executable: {e}); \
+                         prompts will return result = nil"
+                    ),
+                },
+            ),
         }
     }
 
     let driver_label = label.clone();
     let teardown_label = label.clone();
     let driver_fold = fold.clone();
-    let driver_renderer = renderer.clone();
+    let driver_sink = sink.clone();
     let driver_config = config_options.clone();
 
     let driver = tokio::spawn(async move {
@@ -380,7 +392,7 @@ pub async fn start_session(
         let stderr_task = stderr_task;
 
         let notif_fold = driver_fold.clone();
-        let notif_renderer = driver_renderer.clone();
+        let notif_sink = driver_sink.clone();
         let notif_label = driver_label.clone();
         let notif_config = driver_config.clone();
 
@@ -445,7 +457,7 @@ pub async fn start_session(
                     fold_update(
                         &notif_config,
                         &notif_fold,
-                        &notif_renderer,
+                        &notif_sink,
                         &notif_label,
                         notif.update,
                     );
@@ -497,7 +509,12 @@ pub async fn start_session(
                 if let Some(options) = new_session.config_options {
                     *driver_config.lock().unwrap() = options;
                 }
-                driver_renderer.lifecycle(&format!("{driver_label}: session ready"));
+                driver_sink.emit(
+                    &driver_label,
+                    SessionEvent::Lifecycle {
+                        message: format!("{driver_label}: session ready"),
+                    },
+                );
 
                 let _ = ready_tx.send(Ok(()));
 
@@ -511,14 +528,14 @@ pub async fn start_session(
                         } => {
                             let conn2 = conn.clone();
                             let fold = fold.clone();
-                            let renderer = driver_renderer.clone();
+                            let sink = driver_sink.clone();
                             let session_id = session_id.clone();
                             let label = driver_label.clone();
                             let spawned = conn.spawn(async move {
                                 let outcome = run_turn(
                                     &conn2,
                                     &fold,
-                                    &renderer,
+                                    &sink,
                                     &label,
                                     &session_id,
                                     text,
@@ -526,7 +543,7 @@ pub async fn start_session(
                                 )
                                 .await;
                                 let _ = resp.send(outcome);
-                                renderer.flush_session(&label);
+                                sink.emit(&label, SessionEvent::TurnEnd);
                                 Ok(())
                             });
                             // If queueing failed the closure (and `resp` with it)
@@ -539,14 +556,14 @@ pub async fn start_session(
                         SessionCmd::SetConfig { id, value, resp } => {
                             let conn2 = conn.clone();
                             let config = driver_config.clone();
-                            let renderer = driver_renderer.clone();
+                            let sink = driver_sink.clone();
                             let session_id = session_id.clone();
                             let label = driver_label.clone();
                             let spawned = conn.spawn(async move {
                                 let result = run_set_config(
                                     &conn2,
                                     &config,
-                                    &renderer,
+                                    &sink,
                                     &label,
                                     &session_id,
                                     id,
@@ -592,10 +609,15 @@ pub async fn start_session(
             let had_results = channel.any_accepted();
             channel.close().await;
             if !had_results {
-                renderer.lifecycle(&format!(
-                    "{teardown_label}: session ended without typed results \
-                     (agent never submitted through the result tool)"
-                ));
+                sink.emit(
+                    &teardown_label,
+                    SessionEvent::Lifecycle {
+                        message: format!(
+                            "{teardown_label}: session ended without typed results \
+                             (agent never submitted through the result tool)"
+                        ),
+                    },
+                );
             }
         }
         let _ = done_tx.send(true);
@@ -645,21 +667,13 @@ where
     }
 }
 
-/// One-line preview of a prompt for the prompt line: whitespace runs
-/// collapsed to single spaces, truncated to the shared visible-char
-/// budget.
-fn prompt_preview(text: &str) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_visible(&collapsed, LINE_BUDGET).into_owned()
-}
-
 /// Drive one prompt turn: send `session/prompt`, race the deadline, fold
 /// streaming updates, and deliver the outcome.
 #[allow(clippy::too_many_arguments)]
 async fn run_turn(
     conn: &ConnectionTo<agent_client_protocol::Agent>,
     fold: &Arc<Mutex<TurnFold>>,
-    renderer: &Arc<Renderer>,
+    sink: &Arc<dyn EventSink>,
     label: &str,
     session_id: &agent_client_protocol::schema::v1::SessionId,
     text: String,
@@ -670,8 +684,8 @@ async fn run_turn(
 
     // Exactly one prompt line per turn, at send time, attributed to this
     // session (render-logging "Prompt turns render a prompt line"). The
-    // renderer gates it on `--quiet` like every rendered line.
-    renderer.line(label, &format!("prompt: {}", prompt_preview(&text)));
+    // sink gates it on `--quiet` like every rendered line.
+    sink.emit(label, SessionEvent::Prompt { text: text.clone() });
 
     let req = PromptRequest::new(
         session_id.clone(),
@@ -737,7 +751,7 @@ async fn run_turn(
 fn fold_update(
     config: &Arc<Mutex<Vec<SessionConfigOption>>>,
     fold: &Arc<Mutex<TurnFold>>,
-    renderer: &Arc<Renderer>,
+    sink: &Arc<dyn EventSink>,
     label: &str,
     update: SessionUpdate,
 ) {
@@ -747,13 +761,19 @@ fn fold_update(
             ..
         }) => {
             let mut fold = fold.lock().unwrap();
-            fold.text.push_str(&t.text);
+            let message_break = fold.push_text(&t.text);
             drop(fold);
-            renderer.event(label, DisplayEvent::Chunk(t.text));
+            sink.emit(
+                label,
+                SessionEvent::TextDelta {
+                    delta: t.text,
+                    message_break,
+                },
+            );
         }
         SessionUpdate::AgentMessageChunk(_) => {}
         SessionUpdate::ToolCall(call) => {
-            let body = {
+            let line = {
                 let mut fold = fold.lock().unwrap();
                 fold.break_message();
                 let inputs = PeekInputs {
@@ -769,36 +789,36 @@ fn fold_update(
                     Instant::now(),
                 )
             };
-            if let Some(body) = body {
-                renderer.event(label, DisplayEvent::Tool(body));
+            if let Some(line) = line {
+                sink.emit(label, SessionEvent::ToolLine(line));
             }
         }
         SessionUpdate::ToolCallUpdate(update) => {
-            let body = {
+            let line = {
                 let mut fold = fold.lock().unwrap();
                 fold.break_message();
                 fold.tools
                     .update(&update.tool_call_id.0, &update.fields, Instant::now())
             };
-            if let Some(body) = body {
-                renderer.event(label, DisplayEvent::Tool(body));
+            if let Some(line) = line {
+                sink.emit(label, SessionEvent::ToolLine(line));
             }
         }
         SessionUpdate::Plan(plan) => {
-            let entries: Vec<String> = plan
+            let entries: Vec<PlanEntry> = plan
                 .entries
                 .iter()
-                .map(|e| format!("[{}] {}", entry_status(&e.status), e.content))
+                .map(|e| PlanEntry {
+                    status: plan_status(&e.status),
+                    content: e.content.clone(),
+                })
                 .collect();
-            renderer.event(
-                label,
-                DisplayEvent::Plan(format!("plan: {}", entries.join(" "))),
-            );
+            sink.emit(label, SessionEvent::Plan { entries });
         }
         SessionUpdate::UsageUpdate(u) => {
-            renderer.event(
+            sink.emit(
                 label,
-                DisplayEvent::Usage {
+                SessionEvent::Usage {
                     used: u.used,
                     size: u.size,
                 },
@@ -810,10 +830,12 @@ fn fold_update(
             // notification).
             let changed = apply_config_options(config, update.config_options);
             if !changed.is_empty() {
-                renderer.lifecycle(&format!(
-                    "{label}: config changed: {}",
-                    format_changed(&changed)
-                ));
+                sink.emit(
+                    label,
+                    SessionEvent::Lifecycle {
+                        message: format!("{label}: config changed: {}", format_changed(&changed)),
+                    },
+                );
             }
         }
         // User message echo, thoughts, and unstable updates are not rendered in v1.
@@ -827,7 +849,7 @@ fn fold_update(
 async fn run_set_config(
     conn: &ConnectionTo<agent_client_protocol::Agent>,
     config: &Arc<Mutex<Vec<SessionConfigOption>>>,
-    renderer: &Arc<Renderer>,
+    sink: &Arc<dyn EventSink>,
     label: &str,
     session_id: &agent_client_protocol::schema::v1::SessionId,
     id: String,
@@ -849,7 +871,12 @@ async fn run_set_config(
             } else {
                 format_changed(&changed)
             };
-            renderer.lifecycle(&format!("{label}: config changed: {summary}"));
+            sink.emit(
+                label,
+                SessionEvent::Lifecycle {
+                    message: format!("{label}: config changed: {summary}"),
+                },
+            );
             Ok(())
         }
         Err(e) => Err(format!("setConfig(\"{id}\") failed: {e}")),
@@ -911,13 +938,14 @@ fn format_changed(changed: &[(String, String)]) -> String {
         .join(", ")
 }
 
-fn entry_status(status: &agent_client_protocol::schema::v1::PlanEntryStatus) -> char {
+/// Map a protocol plan status to the protocol-agnostic event status.
+fn plan_status(status: &agent_client_protocol::schema::v1::PlanEntryStatus) -> PlanStatus {
     use agent_client_protocol::schema::v1::PlanEntryStatus::*;
     match status {
-        Pending => ' ',
-        InProgress => '>',
-        Completed => 'x',
-        _ => '?',
+        Pending => PlanStatus::Pending,
+        InProgress => PlanStatus::InProgress,
+        Completed => PlanStatus::Completed,
+        _ => PlanStatus::Other,
     }
 }
 
@@ -987,19 +1015,6 @@ mod tests {
                 ("model".to_string(), "haiku".to_string()),
                 ("effort".to_string(), "true".to_string()),
             ]
-        );
-    }
-
-    #[test]
-    fn prompt_preview_collapses_and_truncates() {
-        assert_eq!(
-            prompt_preview("review\n  the\tauth\nmodule\n"),
-            "review the auth module"
-        );
-        let long = "y".repeat(LINE_BUDGET + 10);
-        assert_eq!(
-            prompt_preview(&long),
-            format!("{}…", "y".repeat(LINE_BUDGET))
         );
     }
 }

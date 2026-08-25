@@ -183,7 +183,10 @@ mod tests {
             ("shared".to_string(), spec("shared-bin", &[], &[])),
         ]);
         let project = BTreeMap::from([
-            ("claude".to_string(), spec("claude-acp-project", &["--new"], &[])),
+            (
+                "claude".to_string(),
+                spec("claude-acp-project", &["--new"], &[]),
+            ),
             ("gemini".to_string(), spec("gemini-acp", &[], &[])),
         ]);
         (user, project)

@@ -19,10 +19,7 @@ pub enum SessionEvent {
     /// marks that tool-call activity ended the previous message run
     /// before this chunk (message-boundary metadata; the line renderer
     /// ignores it).
-    TextDelta {
-        delta: String,
-        message_break: bool,
-    },
+    TextDelta { delta: String, message_break: bool },
     /// One rendered tool line, folded by the session's tool policy
     /// (transition dedup + duration).
     ToolLine(ToolLine),

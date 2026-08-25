@@ -5,7 +5,9 @@
 //! — and the [`EventSink`] port. The remaining ports (config source,
 //! agent transport) land here as the restructure proceeds.
 
-use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionId, PermissionOptionKind};
+use agent_client_protocol::schema::v1::{
+    PermissionOption, PermissionOptionId, PermissionOptionKind,
+};
 
 use crate::core::events::SessionEvent;
 

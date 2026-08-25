@@ -18,11 +18,10 @@ struct RegistryFile {
 
 /// Parse one registry layer's TOML contents into its agent map.
 fn parse_layer(label: &str, contents: &str) -> Result<BTreeMap<String, AgentSpec>, ConfigError> {
-    let file: RegistryFile =
-        toml::from_str(contents).map_err(|e| ConfigError::Parse {
-            label: label.into(),
-            source: e.to_string(),
-        })?;
+    let file: RegistryFile = toml::from_str(contents).map_err(|e| ConfigError::Parse {
+        label: label.into(),
+        source: e.to_string(),
+    })?;
     Ok(file.agents)
 }
 
@@ -120,10 +119,7 @@ command = "gemini-acp"
         let reg = Registry::from_parts(Some(USER), Some(PROJECT)).unwrap();
         let claude = reg.resolve_with("claude", &|_| None).unwrap();
         assert_eq!(claude.command, "claude-acp-project");
-        assert!(
-            claude.env.is_empty(),
-            "user env must not leak: {claude:?}"
-        );
+        assert!(claude.env.is_empty(), "user env must not leak: {claude:?}");
         assert_eq!(
             reg.resolve_with("gemini", &|_| None).unwrap().command,
             "gemini-acp"

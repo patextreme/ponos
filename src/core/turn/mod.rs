@@ -13,10 +13,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use agent_client_protocol::schema::v1::{ToolCallLocation, ToolKind, ToolCallUpdateFields};
+use agent_client_protocol::schema::v1::{ToolCallLocation, ToolCallUpdateFields, ToolKind};
 
-use crate::core::text::{LINE_BUDGET, truncate_visible};
 use crate::core::contract::SubmissionSink;
+use crate::core::events::ToolLine;
+use crate::core::text::{LINE_BUDGET, truncate_visible};
 
 /// The in-flight turn's accumulator, folded on the connection's dispatch
 /// loop (in wire order, before the response is delivered).
@@ -28,6 +29,9 @@ pub(crate) struct TurnFold {
     /// The turn's last completed non-empty message run — the fallback
     /// when a turn ends on tool activity with no trailing message.
     prev_text: String,
+    /// Tool-call activity occurred since the last text chunk
+    /// (message-boundary metadata for event consumers; see `push_text`).
+    after_tool: bool,
     /// Whether a turn is currently in flight (submissions landing outside
     /// a turn are dropped as late).
     pub(crate) in_flight: bool,
@@ -56,6 +60,17 @@ impl TurnFold {
         self.text.clear();
         self.prev_text.clear();
         self.result = None;
+        self.after_tool = false;
+    }
+
+    /// Append streamed text to the current message run; returns whether
+    /// tool-call activity ended the previous run before this chunk
+    /// (message-boundary metadata; the line renderer ignores it).
+    pub(crate) fn push_text(&mut self, delta: &str) -> bool {
+        let message_break = self.after_tool;
+        self.text.push_str(delta);
+        self.after_tool = false;
+        message_break
     }
 
     /// Tool-call activity ends the current message run: the run, when
@@ -66,6 +81,7 @@ impl TurnFold {
         if !self.text.is_empty() {
             self.prev_text = std::mem::take(&mut self.text);
         }
+        self.after_tool = true;
     }
 
     /// A turn settles: returns the turn's text — the current message
@@ -272,7 +288,7 @@ impl ToolFold {
         status: &str,
         inputs: &PeekInputs<'_>,
         now: Instant,
-    ) -> Option<String> {
+    ) -> Option<ToolLine> {
         let cwd = Arc::clone(&self.cwd);
         let home = home_dir();
         match self.calls.get_mut(id) {
@@ -302,7 +318,7 @@ impl ToolFold {
         id: &str,
         fields: &ToolCallUpdateFields,
         now: Instant,
-    ) -> Option<String> {
+    ) -> Option<ToolLine> {
         let cwd = Arc::clone(&self.cwd);
         let home = home_dir();
         let inputs = PeekInputs {
@@ -334,7 +350,7 @@ impl ToolFold {
     ///
     /// The peek appends only when the title does not already contain it
     /// (pi-acp-style bash titles are the command itself).
-    fn transition(&mut self, id: &str, status: &str, now: Instant) -> Option<String> {
+    fn transition(&mut self, id: &str, status: &str, now: Instant) -> Option<ToolLine> {
         let entry = self.calls.get_mut(id).expect("entry just seeded");
         // Title via the id→title map; the raw call id is the fallback for
         // updates that preceded their announcement.
@@ -344,6 +360,14 @@ impl ToolFold {
             Some(peek) => format!("tool: {title} {peek}"),
             None => format!("tool: {title}"),
         };
+        let kind = entry.kind;
+        let line = |body: String| ToolLine {
+            id: id.to_string(),
+            title: title.clone(),
+            kind,
+            status: status.to_string(),
+            body,
+        };
         match status {
             "in_progress" => {
                 if entry.last_rendered.as_deref() == Some(status) {
@@ -352,7 +376,7 @@ impl ToolFold {
                 entry.last_rendered = Some(status.to_string());
                 // The start line is the duration anchor once it exists.
                 entry.first_activity = Some(now);
-                Some(head)
+                Some(line(head))
             }
             "completed" | "failed" => {
                 if entry.last_rendered.as_deref() == Some(status) {
@@ -360,10 +384,10 @@ impl ToolFold {
                 }
                 entry.last_rendered = Some(status.to_string());
                 let anchor = entry.first_activity.unwrap_or(now);
-                Some(format!(
+                Some(line(format!(
                     "{head} ({status}, {})",
                     format_duration(now - anchor)
-                ))
+                )))
             }
             _ => None,
         }
@@ -406,7 +430,13 @@ pub(crate) fn status_string(status: &agent_client_protocol::schema::v1::ToolCall
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{ToolCallLocation, ToolKind, ToolCallUpdateFields};
+    use crate::core::events::ToolLine;
+    use agent_client_protocol::schema::v1::{ToolCallLocation, ToolCallUpdateFields, ToolKind};
+
+    /// The formatted body of a folded tool line (test convenience).
+    fn body(line: Option<ToolLine>) -> Option<String> {
+        line.map(|l| l.body)
+    }
 
     #[test]
     fn turn_fold_slot_lifecycle() {
@@ -523,13 +553,13 @@ mod tests {
         let mut tools = ToolFold::default();
         let t0 = Instant::now();
         assert_eq!(
-            tools.announce(
+            body(tools.announce(
                 "c1",
                 "Search files \"foo\"",
                 "pending",
                 &PeekInputs::default(),
                 t0
-            ),
+            )),
             None
         );
         let entry = tools.calls.get("c1").expect("pending seeds the map");
@@ -546,25 +576,25 @@ mod tests {
         let mut tools = ToolFold::default();
         let t0 = Instant::now();
         assert_eq!(
-            tools.announce("c1", "T", "pending", &PeekInputs::default(), t0),
+            body(tools.announce("c1", "T", "pending", &PeekInputs::default(), t0)),
             None
         );
         // Start line at the in_progress transition: bare title, no status.
         assert_eq!(
-            tools.update(
+            body(tools.update(
                 "c1",
                 &fields_status("in_progress"),
                 t0 + Duration::from_millis(100)
-            ),
+            )),
             Some("tool: T".to_string())
         );
         // Terminal line: status + duration measured from the start line.
         assert_eq!(
-            tools.update(
+            body(tools.update(
                 "c1",
                 &fields_status("completed"),
                 t0 + Duration::from_millis(3300)
-            ),
+            )),
             Some("tool: T (completed, 3.2s)".to_string())
         );
     }
@@ -573,28 +603,28 @@ mod tests {
     fn tool_fold_repeated_statuses_are_suppressed() {
         let mut tools = ToolFold::default();
         let t0 = Instant::now();
-        tools.announce("c1", "T", "in_progress", &PeekInputs::default(), t0);
+        body(tools.announce("c1", "T", "in_progress", &PeekInputs::default(), t0));
         // Repeated in_progress (resent by flood-prone agents).
         assert_eq!(
-            tools.update(
+            body(tools.update(
                 "c1",
                 &fields_status("in_progress"),
                 t0 + Duration::from_millis(50)
-            ),
+            )),
             None
         );
         // Repeated terminal status.
-        tools.update(
+        body(tools.update(
             "c1",
             &fields_status("completed"),
             t0 + Duration::from_millis(100),
-        );
+        ));
         assert_eq!(
-            tools.update(
+            body(tools.update(
                 "c1",
                 &fields_status("completed"),
                 t0 + Duration::from_millis(150)
-            ),
+            )),
             None
         );
     }
@@ -604,17 +634,17 @@ mod tests {
         let mut tools = ToolFold::default();
         let t0 = Instant::now();
         assert_eq!(
-            tools.announce("c1", "T", "in_progress", &PeekInputs::default(), t0),
+            body(tools.announce("c1", "T", "in_progress", &PeekInputs::default(), t0)),
             Some("tool: T".to_string())
         );
         assert_eq!(
-            tools.announce(
+            body(tools.announce(
                 "c2",
                 "U",
                 "completed",
                 &PeekInputs::default(),
                 t0 + Duration::from_millis(250)
-            ),
+            )),
             Some("tool: U (completed, 0.0s)".to_string())
         );
     }
@@ -624,26 +654,26 @@ mod tests {
         let mut tools = ToolFold::default();
         let t0 = Instant::now();
         assert_eq!(
-            tools.update("call_0bb9", &fields_status("in_progress"), t0),
+            body(tools.update("call_0bb9", &fields_status("in_progress"), t0)),
             Some("tool: call_0bb9".to_string())
         );
         assert_eq!(
-            tools.update(
+            body(tools.update(
                 "call_0bb9",
                 &fields_status("failed"),
                 t0 + Duration::from_millis(200)
-            ),
+            )),
             Some("tool: call_0bb9 (failed, 0.2s)".to_string())
         );
         // A late announcement still teaches the map the real title.
         assert_eq!(
-            tools.announce(
+            body(tools.announce(
                 "call_0bb9",
                 "Real title",
                 "completed",
                 &PeekInputs::default(),
                 t0 + Duration::from_millis(400)
-            ),
+            )),
             Some("tool: Real title (completed, 0.4s)".to_string())
         );
     }
@@ -652,13 +682,13 @@ mod tests {
     fn tool_fold_direct_completion_measures_from_first_observation() {
         let mut tools = ToolFold::default();
         let t0 = Instant::now();
-        tools.announce("c1", "T", "pending", &PeekInputs::default(), t0);
+        body(tools.announce("c1", "T", "pending", &PeekInputs::default(), t0));
         assert_eq!(
-            tools.update(
+            body(tools.update(
                 "c1",
                 &fields_status("completed"),
                 t0 + Duration::from_millis(1200)
-            ),
+            )),
             Some("tool: T (completed, 1.2s)".to_string())
         );
     }
@@ -712,16 +742,16 @@ mod tests {
             raw_input: Some(&serde_json::json!({"command": "git status"})),
         };
         assert_eq!(
-            tools.announce("c1", "bash", "in_progress", &inputs, t0),
+            body(tools.announce("c1", "bash", "in_progress", &inputs, t0)),
             Some("tool: bash git status".to_string())
         );
         // The same peek rides on the terminal line.
         assert_eq!(
-            tools.update(
+            body(tools.update(
                 "c1",
                 &fields_status("completed"),
                 t0 + Duration::from_millis(500)
-            ),
+            )),
             Some("tool: bash git status (completed, 0.5s)".to_string())
         );
     }
@@ -735,7 +765,7 @@ mod tests {
             raw_input: Some(&serde_json::json!({"cmd": "ls -la"})),
         };
         assert_eq!(
-            tools.announce("c1", "bash", "in_progress", &inputs, Instant::now()),
+            body(tools.announce("c1", "bash", "in_progress", &inputs, Instant::now())),
             Some("tool: bash ls -la".to_string())
         );
     }
@@ -749,7 +779,7 @@ mod tests {
             raw_input: None,
         };
         assert_eq!(
-            tools.announce("c1", "read", "in_progress", &inputs, Instant::now()),
+            body(tools.announce("c1", "read", "in_progress", &inputs, Instant::now())),
             Some("tool: read src/a.rs:12".to_string())
         );
     }
@@ -763,7 +793,7 @@ mod tests {
             raw_input: Some(&serde_json::json!({"pattern": "foo"})),
         };
         assert_eq!(
-            tools.announce("c1", "grep", "in_progress", &inputs, Instant::now()),
+            body(tools.announce("c1", "grep", "in_progress", &inputs, Instant::now())),
             Some("tool: grep {\"pattern\":\"foo\"}".to_string())
         );
     }
@@ -775,13 +805,13 @@ mod tests {
         // "Search files \"foo\"" with no raw input and no locations: the
         // spec's no-derivable-peek case.
         assert_eq!(
-            tools.announce(
+            body(tools.announce(
                 "c1",
                 "Search files \"foo\"",
                 "in_progress",
                 &PeekInputs::default(),
                 t0
-            ),
+            )),
             Some("tool: Search files \"foo\"".to_string())
         );
         assert!(tools.calls["c1"].peek.is_none());
@@ -798,14 +828,13 @@ mod tests {
             raw_input: Some(&serde_json::json!({"command": "git status"})),
         };
         assert_eq!(
-            tools.announce("c1", "git status", "in_progress", &inputs, Instant::now()),
+            body(tools.announce("c1", "git status", "in_progress", &inputs, Instant::now())),
             Some("tool: git status".to_string())
         );
         // A later line for the same call stays deduplicated (the check
         // runs at render time, against the current title).
         assert!(
-            tools
-                .update("c1", &fields_status("completed"), Instant::now())
+            body(tools.update("c1", &fields_status("completed"), Instant::now()))
                 .unwrap()
                 .starts_with("tool: git status (")
         );
@@ -824,7 +853,7 @@ mod tests {
             raw_input: None,
         };
         assert_eq!(
-            tools.announce("c1", "bash", "pending", &announced, t0),
+            body(tools.announce("c1", "bash", "pending", &announced, t0)),
             None
         );
         // Statusless update carrying the input: folds the peek, renders
@@ -832,16 +861,16 @@ mod tests {
         let raw = serde_json::json!({"command": "cargo test"});
         let fields = ToolCallUpdateFields::new().raw_input(raw);
         assert_eq!(
-            tools.update("c1", &fields, t0 + Duration::from_millis(50)),
+            body(tools.update("c1", &fields, t0 + Duration::from_millis(50))),
             None
         );
         assert_eq!(tools.calls["c1"].peek.as_deref(), Some("cargo test"));
         assert_eq!(
-            tools.update(
+            body(tools.update(
                 "c1",
                 &fields_status("in_progress"),
                 t0 + Duration::from_millis(100)
-            ),
+            )),
             Some("tool: bash cargo test".to_string())
         );
         // Stickiness: a later candidate never overwrites the set peek.
@@ -850,7 +879,7 @@ mod tests {
             .raw_input(later)
             .status(tool_status("completed"));
         assert_eq!(
-            tools.update("c1", &fields, t0 + Duration::from_millis(400)),
+            body(tools.update("c1", &fields, t0 + Duration::from_millis(400))),
             Some("tool: bash cargo test (completed, 0.3s)".to_string())
         );
     }
@@ -864,9 +893,8 @@ mod tests {
             locations: Some(&[]),
             raw_input: Some(&serde_json::json!({"command": long})),
         };
-        let line = tools
-            .announce("c1", "bash", "in_progress", &inputs, Instant::now())
-            .unwrap();
+        let line =
+            body(tools.announce("c1", "bash", "in_progress", &inputs, Instant::now())).unwrap();
         assert_eq!(line, format!("tool: bash {}…", "x".repeat(LINE_BUDGET)));
     }
 

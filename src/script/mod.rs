@@ -16,8 +16,9 @@ use mlua::{Function, Lua, LuaOptions, MultiValue, StdLib, Table, Value};
 use crate::acp::{self, SessionHandle, SessionOptions};
 use crate::core::config::{AgentSpec, Registry};
 use crate::core::error::ExitSignal;
+use crate::core::events::SessionEvent;
+use crate::core::ports::EventSink;
 use crate::core::task::{self, TaskRegistry, TaskState};
-use crate::render::Renderer;
 
 use agent_client_protocol::schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
@@ -28,7 +29,7 @@ use require::ScriptRequirer;
 /// Everything the Lua environment needs, shared per run (single-threaded).
 pub struct RuntimeState {
     pub registry: Registry,
-    pub renderer: Arc<Renderer>,
+    pub sink: Arc<dyn EventSink>,
     pub invocation_dir: PathBuf,
     pub script_root: PathBuf,
     pub tasks: Rc<TaskRegistry>,
@@ -41,7 +42,9 @@ pub struct RunConfig {
     pub script_path: PathBuf,
     pub invocation_dir: PathBuf,
     pub registry: Registry,
-    pub renderer: Arc<Renderer>,
+    /// The output sink: `Arc<Renderer>` coerces here at construction
+    /// sites, so callers keep building the terminal renderer.
+    pub renderer: Arc<dyn EventSink>,
 }
 
 /// Result of one run.
@@ -209,10 +212,7 @@ fn new_session_obj(lua: &Lua, handle: SessionHandle) -> mlua::Result<Table> {
                 // sharing a label, and this registry is the run-end
                 // teardown list — a label match would unregister the
                 // survivor and strand its subprocess.
-                state
-                    .sessions
-                    .borrow_mut()
-                    .retain(|s| s.pid != handle.pid);
+                state.sessions.borrow_mut().retain(|s| s.pid != handle.pid);
                 Ok(())
             }
         })?,
@@ -359,9 +359,12 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                     None => None,
                 };
 
-                state
-                    .renderer
-                    .lifecycle(&format!("{label}: spawning agent"));
+                state.sink.emit(
+                    &label,
+                    SessionEvent::Lifecycle {
+                        message: format!("{label}: spawning agent"),
+                    },
+                );
                 let handle = acp::start_session(
                     &spec,
                     SessionOptions {
@@ -370,7 +373,7 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                         label: label.clone(),
                         result,
                     },
-                    state.renderer.clone(),
+                    state.sink.clone(),
                 )
                 .await
                 .map_err(|e| mlua::Error::runtime(e.to_string()))?;
@@ -524,7 +527,7 @@ fn bind_ponos(lua: &Lua) -> mlua::Result<()> {
     // ponos.log(msg)
     let log = lua.create_function(|lua, msg: String| {
         let state = runtime_state(lua)?;
-        state.renderer.script_log(&msg);
+        state.sink.script_log(&msg);
         Ok(())
     })?;
     ponos.set("log", log)?;
@@ -607,7 +610,7 @@ pub fn setup_lua(cfg: &RunConfig) -> mlua::Result<Lua> {
 
     let state = Rc::new(RuntimeState {
         registry: cfg.registry.clone(),
-        renderer: cfg.renderer.clone(),
+        sink: cfg.renderer.clone(),
         invocation_dir: cfg.invocation_dir.clone(),
         script_root,
         tasks: Rc::new(TaskRegistry::default()),

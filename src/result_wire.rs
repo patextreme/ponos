@@ -35,7 +35,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
 
 use crate::core::contract::{ResultContract, SubmissionSink};
-use crate::render::Renderer;
+use crate::core::events::SessionEvent;
+use crate::core::ports::EventSink;
 
 /// Filename prefix for per-session result sockets (`ponos-r-<32hex>.sock`).
 const SOCKET_PREFIX: &str = "ponos-r-";
@@ -165,7 +166,7 @@ pub fn spawn_result_channel(
     listener: UnixListener,
     contract: ResultContract,
     sink: SubmissionSink,
-    renderer: Arc<Renderer>,
+    event_sink: Arc<dyn EventSink>,
     label: String,
     cancel: watch::Sender<bool>,
 ) -> ResultChannel {
@@ -181,11 +182,12 @@ pub fn spawn_result_channel(
                     Ok((stream, _)) => {
                         let contract = contract.clone();
                         let sink = sink.clone();
-                        let renderer = renderer.clone();
+                        let event_sink = event_sink.clone();
                         let label = label.clone();
                         let any = any_task.clone();
                         tokio::spawn(async move {
-                            serve_connection(stream, contract, sink, renderer, label, any).await;
+                            serve_connection(stream, contract, sink, event_sink, label, any)
+                                .await;
                         });
                     }
                     Err(e) => {
@@ -219,7 +221,7 @@ async fn serve_connection(
     stream: UnixStream,
     contract: ResultContract,
     sink: SubmissionSink,
-    renderer: Arc<Renderer>,
+    event_sink: Arc<dyn EventSink>,
     label: String,
     any_accepted: Arc<AtomicBool>,
 ) {
@@ -242,42 +244,40 @@ async fn serve_connection(
         let BridgeRequest::Submit { value } = request;
         match contract.validate(&value) {
             Ok(()) => {
-                if sink(value) {
+                let late = !sink(value);
+                if !late {
                     any_accepted.store(true, Ordering::Relaxed);
-                    if write_verdict(
-                        &mut write_half,
-                        &Verdict {
-                            ok: true,
-                            errors: vec![],
-                        },
-                    )
-                    .await
-                    .is_err()
-                    {
-                        break;
-                    }
-                } else {
-                    // No turn in flight: drop, but tell the bridge it was
-                    // fine (the model already finished; a late submit must
-                    // not look like a validation failure).
-                    renderer.lifecycle(&format!(
-                        "{label}: dropped late typed-result submission (no turn in flight)"
-                    ));
-                    if write_verdict(
-                        &mut write_half,
-                        &Verdict {
-                            ok: true,
-                            errors: vec![],
-                        },
-                    )
-                    .await
-                    .is_err()
-                    {
-                        break;
-                    }
+                }
+                event_sink.emit(
+                    &label,
+                    SessionEvent::ResultVerdict {
+                        accepted: true,
+                        late,
+                    },
+                );
+                if write_verdict(
+                    &mut write_half,
+                    &Verdict {
+                        ok: true,
+                        errors: vec![],
+                    },
+                )
+                .await
+                .is_err()
+                {
+                    break;
                 }
             }
             Err(errors) => {
+                // A violation is a tool error the model sees and can fix
+                // inside the same turn; nothing to render.
+                event_sink.emit(
+                    &label,
+                    SessionEvent::ResultVerdict {
+                        accepted: false,
+                        late: false,
+                    },
+                );
                 if write_verdict(&mut write_half, &Verdict { ok: false, errors })
                     .await
                     .is_err()
@@ -346,6 +346,7 @@ pub async fn connect(path: &std::path::Path) -> std::io::Result<UnixStream> {
 mod tests {
     use super::*;
     use crate::core::contract::ResultContract;
+    use crate::render::Renderer;
 
     fn contract() -> ResultContract {
         ResultContract::compile(serde_json::json!({
@@ -369,7 +370,8 @@ mod tests {
         // production); clean up here so the temp dir is not littered.
         let _ = std::fs::remove_file(&p1);
         let _ = std::fs::remove_file(&p2);
-        let renderer = Arc::new(Renderer::new(crate::render::RenderOptions::quiet()));
+        let sink: Arc<dyn EventSink> =
+            Arc::new(Renderer::new(crate::render::RenderOptions::quiet()));
         // Closing channels (the production cleanup path) unlinks paths.
         let (l3, p3) = bind_result_socket().await.expect("bind 3");
         let (cancel_tx, _cancel_rx) = watch::channel(false);
@@ -377,7 +379,7 @@ mod tests {
             l3,
             contract(),
             Arc::new(|_| true),
-            renderer.clone(),
+            sink.clone(),
             "t/s1".into(),
             cancel_tx,
         );
@@ -417,7 +419,8 @@ mod tests {
     async fn submit_verdict_round_trip_over_socket() {
         let (listener, path) = bind_result_socket().await.expect("bind");
         let (cancel_tx, _cancel_rx) = watch::channel(false);
-        let renderer = Arc::new(Renderer::new(crate::render::RenderOptions::quiet()));
+        let event_sink: Arc<dyn EventSink> =
+            Arc::new(Renderer::new(crate::render::RenderOptions::quiet()));
         let in_flight = Arc::new(std::sync::Mutex::new(Some(())));
         let sink: SubmissionSink = {
             let in_flight = in_flight.clone();
@@ -427,7 +430,7 @@ mod tests {
             listener,
             contract(),
             sink,
-            renderer,
+            event_sink,
             "t/s1".into(),
             cancel_tx,
         );

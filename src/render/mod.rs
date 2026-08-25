@@ -281,9 +281,7 @@ impl EventSink for Renderer {
             SessionEvent::Prompt { text } => {
                 self.line(label, &format!("prompt: {}", prompt_preview(&text)))
             }
-            SessionEvent::TextDelta { delta, .. } => {
-                self.event(label, DisplayEvent::Chunk(delta))
-            }
+            SessionEvent::TextDelta { delta, .. } => self.event(label, DisplayEvent::Chunk(delta)),
             SessionEvent::ToolLine(line) => self.event(label, DisplayEvent::Tool(line.body)),
             SessionEvent::Plan { entries } => {
                 self.event(label, DisplayEvent::Plan(plan_summary(&entries)))
@@ -295,9 +293,7 @@ impl EventSink for Renderer {
             SessionEvent::Lifecycle { message } => self.lifecycle(&message),
             // A structurally valid submission with no turn in flight is
             // dropped (not errored); the one-line note is the only render.
-            SessionEvent::ResultVerdict {
-                late: true, ..
-            } => self.lifecycle(&format!(
+            SessionEvent::ResultVerdict { late: true, .. } => self.lifecycle(&format!(
                 "{label}: dropped late typed-result submission (no turn in flight)"
             )),
             // Verdicts ride the result channel to the bridge; nothing to
@@ -339,7 +335,10 @@ mod tests {
             "review the auth module"
         );
         let long = "y".repeat(LINE_BUDGET + 10);
-        assert_eq!(prompt_preview(&long), format!("{}\u{2026}", "y".repeat(LINE_BUDGET)));
+        assert_eq!(
+            prompt_preview(&long),
+            format!("{}\u{2026}", "y".repeat(LINE_BUDGET))
+        );
     }
 
     #[test]
