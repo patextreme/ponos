@@ -9,6 +9,10 @@ use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 use std::sync::Mutex;
 
+use crate::core::events::{PlanEntry, PlanStatus, SessionEvent};
+use crate::core::ports::EventSink;
+use crate::core::text::{LINE_BUDGET, truncate_visible};
+
 /// Palette of distinct ANSI foreground hues, cycled per session label.
 const PALETTE: [&str; 6] = [
     "\x1b[36m", // cyan
@@ -241,6 +245,73 @@ impl Renderer {
     }
 }
 
+/// One-line preview of a prompt for the prompt line: whitespace runs
+/// collapsed to single spaces, truncated to the shared visible-char
+/// budget.
+fn prompt_preview(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_visible(&collapsed, LINE_BUDGET).into_owned()
+}
+
+/// Render marker for one plan status (matches the streaming plan line).
+fn plan_marker(status: PlanStatus) -> char {
+    match status {
+        PlanStatus::Pending => ' ',
+        PlanStatus::InProgress => '>',
+        PlanStatus::Completed => 'x',
+        PlanStatus::Other => '?',
+    }
+}
+
+/// Compact plan status list for the plan line.
+fn plan_summary(entries: &[PlanEntry]) -> String {
+    let rendered: Vec<String> = entries
+        .iter()
+        .map(|e| format!("[{}] {}", plan_marker(e.status), e.content))
+        .collect();
+    format!("plan: {}", rendered.join(" "))
+}
+
+/// The terminal renderer as an [`EventSink`]: structured session events
+/// map onto the existing display-event handling; every byte of formatting
+/// (truncation, prefixes, colors, gating) stays here.
+impl EventSink for Renderer {
+    fn emit(&self, label: &str, event: SessionEvent) {
+        match event {
+            SessionEvent::Prompt { text } => {
+                self.line(label, &format!("prompt: {}", prompt_preview(&text)))
+            }
+            SessionEvent::TextDelta { delta, .. } => {
+                self.event(label, DisplayEvent::Chunk(delta))
+            }
+            SessionEvent::ToolLine(line) => self.event(label, DisplayEvent::Tool(line.body)),
+            SessionEvent::Plan { entries } => {
+                self.event(label, DisplayEvent::Plan(plan_summary(&entries)))
+            }
+            SessionEvent::Usage { used, size } => {
+                self.event(label, DisplayEvent::Usage { used, size })
+            }
+            SessionEvent::StderrLine { line } => self.agent_stderr(label, &line),
+            SessionEvent::Lifecycle { message } => self.lifecycle(&message),
+            // A structurally valid submission with no turn in flight is
+            // dropped (not errored); the one-line note is the only render.
+            SessionEvent::ResultVerdict {
+                late: true, ..
+            } => self.lifecycle(&format!(
+                "{label}: dropped late typed-result submission (no turn in flight)"
+            )),
+            // Verdicts ride the result channel to the bridge; nothing to
+            // render on the terminal sink.
+            SessionEvent::ResultVerdict { .. } => {}
+            SessionEvent::TurnEnd => self.flush_session(label),
+        }
+    }
+
+    fn script_log(&self, message: &str) {
+        self.script_log(message)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,4 +332,31 @@ mod tests {
         assert!(digits(17..19), "second: {ts:?}");
     }
 
+    #[test]
+    fn prompt_preview_collapses_and_truncates() {
+        assert_eq!(
+            prompt_preview("review\n  the\tauth\nmodule\n"),
+            "review the auth module"
+        );
+        let long = "y".repeat(LINE_BUDGET + 10);
+        assert_eq!(prompt_preview(&long), format!("{}\u{2026}", "y".repeat(LINE_BUDGET)));
+    }
+
+    #[test]
+    fn plan_summary_renders_status_markers() {
+        let entries = vec![
+            PlanEntry {
+                status: PlanStatus::Completed,
+                content: "read the code".into(),
+            },
+            PlanEntry {
+                status: PlanStatus::InProgress,
+                content: "fix the bug".into(),
+            },
+        ];
+        assert_eq!(
+            plan_summary(&entries),
+            "plan: [x] read the code [>] fix the bug"
+        );
+    }
 }
