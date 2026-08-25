@@ -5,7 +5,6 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::config::Registry;
 use crate::render::{RenderOptions, Renderer};
 use crate::script::{self, RunConfig};
 
@@ -124,7 +123,7 @@ fn run_check(script: PathBuf, no_color: bool) -> ExitCode {
         return ExitCode::from(2);
     }
     let invocation_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let registry = match Registry::discover(&invocation_dir) {
+    let registry = match crate::config_fs::discover(&invocation_dir) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("error: {e}");
@@ -188,7 +187,7 @@ pub fn main() -> ExitCode {
         .try_init();
 
     let invocation_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let registry = match Registry::discover(&invocation_dir) {
+    let registry = match crate::config_fs::discover(&invocation_dir) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("error: {e}");

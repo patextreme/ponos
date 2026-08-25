@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::config::Registry;
+use crate::core::config::Registry;
 
 /// One in-process finding: a real path, a 1-based position, a message.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -16,6 +16,7 @@
 //! - `turn` folds `agent_client_protocol` schema types: the fold's input
 //!   is the ACP update stream. Schema data types only — this module
 //!   never opens a connection.
+pub mod config;
 pub mod contract;
 pub mod error;
 pub mod task;

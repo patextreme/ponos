@@ -39,7 +39,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{AcpAgent, ByteStreams, Client, ConnectionTo};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::config::AgentSpec;
+use crate::core::config::AgentSpec;
 use crate::core::contract::ResultContract;
 use crate::core::text::{LINE_BUDGET, truncate_visible};
 use crate::core::turn::{PeekInputs, TurnFold, status_string, submission_sink};

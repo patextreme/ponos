@@ -14,7 +14,7 @@ use mlua::LuaSerdeExt;
 use mlua::{Function, Lua, LuaOptions, MultiValue, StdLib, Table, Value};
 
 use crate::acp::{self, SessionHandle, SessionOptions};
-use crate::config::{AgentSpec, Registry};
+use crate::core::config::{AgentSpec, Registry};
 use crate::core::error::ExitSignal;
 use crate::core::task::{self, TaskRegistry, TaskState};
 use crate::render::Renderer;
