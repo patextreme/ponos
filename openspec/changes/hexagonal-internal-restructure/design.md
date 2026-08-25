@@ -25,13 +25,23 @@ Constraints (settled with the user — see proposal):
 
 **Goals:**
 
-- A `core` module holding all pure domain logic, depending on nothing but
-  std + serde + jsonschema.
+- A `core` module holding all pure domain logic, free of I/O and of every
+  adapter module. Its dep set is std + serde + jsonschema plus data-level
+  `mlua` value types (task results *are* Luau values), `agent_client_protocol`
+  schema types (the fold's input), tokio *sync* primitives, and `std::env`
+  reads (HOME, `${VAR}`) — no fs, process, socket, or interpreter surface.
 - Dependency arrows that all point inward: `acp`/`render`/`config`/`check`/
-  `script` → `core`, never across each other, never back into `cli`.
+  `script` → `core`, never across each other, never back into `cli` — with
+  three exceptions the pinned integration-test surface keeps alive until
+  change ②: `acp → result_wire` and `bridge → result_wire` (the driver owns
+  the per-session result-channel wiring; the bridge is the client half of
+  the submit/verdict protocol), and one composition line `script → acp`
+  (`default_transport()` in `script/state.rs`).
 - Ports defined as `core` traits, implemented in the leaf modules, wired in
   `cli` (the composition root) — so change ② can move each implementor into
-  its own crate without touching call sites again.
+  its own crate without touching call sites again. Two wirings land with
+  the change-② test-surface update instead: `BridgeConfig` is core-owned
+  data (see D6), and `script` composes its default transport itself.
 - Structured domain events flowing driver → sink, with all formatting
   isolated in `render`.
 
@@ -50,12 +60,16 @@ Constraints (settled with the user — see proposal):
 
 ```
 src/
-  core/           # pure domain: no mlua, no tokio I/O, no fs, no acp
+  core/           # pure domain: no fs/process/socket I/O, no adapter modules;
+                  #   data-level mlua + ACP schema types + tokio sync allowed
     turn/         #   TurnFold, ToolFold, settle logic
     task.rs       #   TaskState, TaskRegistry, TaskResult
     contract.rs   #   ResultContract (schema compile; no socket)
     config/       #   AgentSpec, Registry model, merge, ${VAR} interp
     events.rs     #   structured domain events (Event enum + payloads)
+    session.rs    #   session façade (SessionHandle, SessionOptions,
+                  #   TurnOutcome) that AgentTransport is defined against
+    text.rs       #   shared truncation/line-budget helpers (turn + render)
     ports.rs      #   AgentTransport, EventSink, ConfigSource, InteractionPolicy
     error.rs
   acp/            # adapter: stdio process + JSON-RPC + driver
@@ -101,7 +115,9 @@ signature but becomes a thin `AgentTransport` impl over a split interior:
 (initialize/new-session handshake, capability negotiation), `acp/driver.rs`
 (command loop, `run_turn`, fold orchestration via `core::turn`, event
 emission, config-option folding). `SessionHandle` stays the type the script
-layer sees — it is already a good async façade. *Alternative rejected:*
+layer sees — it is already a good async façade (it now lives in
+`core::session`, re-exported by `acp` for the pinned public API).
+*Alternative rejected:*
 defining the port against the full ACP surface — the port is defined by
 what `script` calls (`session`, `prompt`, `cancel`, `close`, config
 options), which is what mocks and future transports must satisfy.
@@ -115,10 +131,13 @@ impl with I/O; lint needs a pure path resolver — sharing would re-couple
 check to the script host.
 
 **D6 — bridge server-name inversion.** The MCP server spec injected into
-agent sessions (`bridge::SERVER_NAME` + env wiring) becomes data flowing
-**into** the driver from `cli` composition (a `BridgeConfig` value in
-session options), with the constant defined in `bridge.rs` and referenced
-only there.
+agent sessions (`bridge::SERVER_NAME` + env wiring) becomes data the driver
+consumes as a `BridgeConfig` value, with the constant defined in `bridge.rs`
+and referenced only there. *As landed:* the untouched test literals pin
+`SessionOptions`/`RunConfig` at four fields, so the value cannot flow from
+`cli` composition yet — it is core-owned (`BridgeConfig::ponos_bridge()`)
+with a unit test in `bridge.rs` pinning it to the binary's constants, and
+the `cli` wiring rides the change-② surface update.
 
 **D7 — Port mechanics: generics now, `dyn` only where needed.** Ports are
 plain traits; call sites take `impl Trait` generics where the owner is

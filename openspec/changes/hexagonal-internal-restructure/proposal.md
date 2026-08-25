@@ -19,7 +19,8 @@ suite stay byte-identical and green.
 
 Module tree rebuilt to the target shape (single crate, new module layout):
 
-- New `core` module (pure domain, no mlua/tokio-I/O/fs):
+- New `core` module (pure domain, no fs/process/socket I/O; data-level
+  mlua and tokio sync allowed):
   turn/tool fold logic (`TurnFold`/`ToolFold`), task semantics
   (`TaskRegistry`/`TaskState`), `ResultContract` schema compilation, config
   model + merge + `${VAR}` interpolation, domain event types, error types.
