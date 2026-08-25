@@ -13,14 +13,13 @@
 //! findings about code the runtime would resolve differently.
 
 use std::collections::{HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use full_moon::ast::{Call, Expression, FunctionArgs, FunctionCall, Index, Prefix, Suffix};
 use full_moon::tokenizer::{Position, Token, TokenKind, TokenType};
 use full_moon::visitors::Visitor;
 
 use super::Finding;
-use crate::script::require;
 
 /// A literal call site position (1-based line/column).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +62,59 @@ pub(crate) struct WalkResult {
     pub broken: Vec<Finding>,
     /// Files that could not be read or parsed (`path:line:col: message`).
     pub failures: Vec<Finding>,
+}
+
+/// Lexically normalize a path: resolve `.`/`..` components without
+/// touching the filesystem (`..` at the root pops). Same directory rules
+/// as the runtime navigator (`script::require`), duplicated on purpose:
+/// the lint walk is zero-execution by construction and must not depend on
+/// the script host.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// True when `path` does not stay inside `root` (the script tree guard).
+fn escapes(root: &Path, path: &Path) -> bool {
+    !path.starts_with(root)
+}
+
+/// A literal require string is navigable only when explicitly relative.
+fn is_relative_module(module: &str) -> bool {
+    module.starts_with("./") || module.starts_with("../")
+}
+
+/// Resolve an already-joined module path to a physical file:
+/// `<p>.luau`, `<p>.lua`, `<p>/init.luau`, `<p>/init.lua`.
+fn resolve_file(path: &Path) -> Option<PathBuf> {
+    for ext in ["luau", "lua"] {
+        let candidate = path.with_extension(ext);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    for init in ["init.luau", "init.lua"] {
+        let candidate = path.join(init);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Statically resolve a literal require argument exactly as the runtime
+/// navigator would, relative to the requiring file's directory.
+fn resolve_candidates(from_dir: &Path, module: &str) -> Option<PathBuf> {
+    resolve_file(&normalize(&from_dir.join(module)))
 }
 
 /// Walk the literal require graph from `entry` (a canonicalized path),
@@ -146,20 +198,20 @@ pub(crate) fn walk(entry: &Path) -> WalkResult {
 /// physical module file, or a finding message naming the problem.
 fn resolve_edge(root: &Path, from_file: &Path, module: &str) -> Result<PathBuf, String> {
     let from_dir = from_file.parent().unwrap_or(Path::new("."));
-    if !require::is_relative_module(module) {
+    if !is_relative_module(module) {
         return Err(format!(
             "require path is not relative to the script: `{module}` \
              (only \"./\" and \"../\" paths are allowed)"
         ));
     }
-    let target = require::normalize(&from_dir.join(module));
-    if require::escapes(root, &target) {
+    let target = normalize(&from_dir.join(module));
+    if escapes(root, &target) {
         return Err(format!(
             "require path escapes the script directory: {}",
             target.display()
         ));
     }
-    require::resolve_candidates(from_dir, module).ok_or_else(|| {
+    resolve_candidates(from_dir, module).ok_or_else(|| {
         format!(
             "cannot resolve require `{module}`: no module file at {}",
             target.display()

@@ -15,7 +15,7 @@ use mlua::{Function, Lua};
 /// Lexically normalize a path: resolve `.`/`..` components without
 /// touching the filesystem (`..` at the root pops, matching the
 /// navigator). Shared by the runtime navigator and the static checker.
-pub(crate) fn normalize(path: &Path) -> PathBuf {
+fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {
@@ -30,12 +30,12 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
 }
 
 /// True when `path` does not stay inside `root` (the script tree guard).
-pub(crate) fn escapes(root: &Path, path: &Path) -> bool {
+fn escapes(root: &Path, path: &Path) -> bool {
     !path.starts_with(root)
 }
 
 /// A literal require string is navigable only when explicitly relative.
-pub(crate) fn is_relative_module(module: &str) -> bool {
+fn is_relative_module(module: &str) -> bool {
     module.starts_with("./") || module.starts_with("../")
 }
 
@@ -60,9 +60,8 @@ fn resolve_file(path: &Path) -> Option<PathBuf> {
 /// Statically resolve a literal require argument (e.g. `"./lib/util"`)
 /// exactly as the runtime navigator would, relative to the requiring
 /// file's directory: the physical module file when a candidate exists,
-/// `None` when none does. Callable without a `Lua` instance (used by the
-/// `check` lints and the `run` pre-flight).
-pub(crate) fn resolve_candidates(from_dir: &Path, module: &str) -> Option<PathBuf> {
+/// `None` when none does.
+fn resolve_candidates(from_dir: &Path, module: &str) -> Option<PathBuf> {
     resolve_file(&normalize(&from_dir.join(module)))
 }
 
