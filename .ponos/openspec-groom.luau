@@ -2,7 +2,7 @@
 
 const DEFAULT_MODEL = "zai/glm-5.3"
 const SMALL_MODEL = "qwencloud/deepseek-v4-flash-0731"
-const CHANGE_NAME = "prompt-text-last-message"
+const CHANGE_NAME = "remove-constructor-config"
 
 local predicateAgent = require("./predicate")
 
