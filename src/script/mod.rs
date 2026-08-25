@@ -13,11 +13,12 @@ use std::time::Duration;
 use mlua::LuaSerdeExt;
 use mlua::{Function, Lua, LuaOptions, MultiValue, StdLib, Table, Value};
 
-use crate::acp::{self, SessionHandle, SessionOptions};
 use crate::core::config::{AgentSpec, Registry};
 use crate::core::error::ExitSignal;
 use crate::core::events::SessionEvent;
+use crate::core::ports::AgentTransport;
 use crate::core::ports::EventSink;
+use crate::core::session::{SessionHandle, SessionOptions};
 use crate::core::task::{self, TaskRegistry, TaskState};
 
 use agent_client_protocol::schema::v1::{
@@ -30,6 +31,9 @@ use require::ScriptRequirer;
 pub struct RuntimeState {
     pub registry: Registry,
     pub sink: Arc<dyn EventSink>,
+    /// Where agent sessions come from (the ACP stdio transport by
+    /// default; see [`default_transport`]).
+    pub transport: Arc<dyn AgentTransport>,
     pub invocation_dir: PathBuf,
     pub script_root: PathBuf,
     pub tasks: Rc<TaskRegistry>,
@@ -365,18 +369,20 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                         message: format!("{label}: spawning agent"),
                     },
                 );
-                let handle = acp::start_session(
-                    &spec,
-                    SessionOptions {
-                        cwd,
-                        mcp_servers,
-                        label: label.clone(),
-                        result,
-                    },
-                    state.sink.clone(),
-                )
-                .await
-                .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+                let handle = state
+                    .transport
+                    .start_session(
+                        &spec,
+                        SessionOptions {
+                            cwd,
+                            mcp_servers,
+                            label: label.clone(),
+                            result,
+                        },
+                        state.sink.clone(),
+                    )
+                    .await
+                    .map_err(|e| mlua::Error::runtime(e.to_string()))?;
                 state.sessions.borrow_mut().push(handle.clone());
 
                 new_session_obj(&lua, handle)
@@ -572,6 +578,15 @@ fn outcome_entry(lua: &Lua, res: mlua::Result<MultiValue>) -> mlua::Result<Table
 // Environment setup
 // ---------------------------------------------------------------------------
 
+/// The transport the pinned entry points (`run`, `setup_lua`) compose by
+/// default: the ACP stdio adapter. This one line is the composition the
+/// workspace split (change ②) moves into `cli` — `RunConfig` gains an
+/// injected transport there, where the test surface may be updated with
+/// it. Everything else in this module is typed against the port.
+fn default_transport() -> Arc<dyn AgentTransport> {
+    Arc::new(crate::acp::Transport)
+}
+
 /// Create the sandboxed Luau environment for a run.
 pub fn setup_lua(cfg: &RunConfig) -> mlua::Result<Lua> {
     let lua = Lua::new_with(
@@ -611,6 +626,7 @@ pub fn setup_lua(cfg: &RunConfig) -> mlua::Result<Lua> {
     let state = Rc::new(RuntimeState {
         registry: cfg.registry.clone(),
         sink: cfg.renderer.clone(),
+        transport: default_transport(),
         invocation_dir: cfg.invocation_dir.clone(),
         script_root,
         tasks: Rc::new(TaskRegistry::default()),

@@ -4,14 +4,18 @@
 //! [`InteractionPolicy`]. The remaining ports (config source, agent
 //! transport) land here as the restructure proceeds.
 
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionId, PermissionOptionKind,
 };
 
-use crate::core::config::{ConfigError, Registry};
+use crate::core::config::{AgentSpec, ConfigError, Registry};
 use crate::core::events::SessionEvent;
+use crate::core::session::{SessionError, SessionHandle, SessionOptions};
 
 /// Wiring for the injected typed-results MCP server (the `ponos __bridge`
 /// subprocess suggested to agents in `session/new { mcpServers }`).
@@ -38,6 +42,22 @@ impl BridgeConfig {
             schema_env: "PONOS_RESULT_SCHEMA",
         }
     }
+}
+
+/// How the runtime starts agent sessions. The ACP stdio adapter
+/// implements it; the port is shaped by what the script layer consumes —
+/// spawn a session, then `prompt`/`cancel`/`close` and config options on
+/// the returned [`SessionHandle`] — which is exactly what mocks and
+/// future transports must satisfy. Manually boxed futures keep the trait
+/// object-safe without an async-trait dependency.
+pub trait AgentTransport: Send + Sync {
+    /// Start one agent session and drive it until closed.
+    fn start_session<'a>(
+        &'a self,
+        spec: &'a AgentSpec,
+        opts: SessionOptions,
+        sink: Arc<dyn EventSink>,
+    ) -> Pin<Box<dyn Future<Output = Result<SessionHandle, SessionError>> + 'a>>;
 }
 
 /// Where the agent registry comes from. The TOML/fs loader implements it

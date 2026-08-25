@@ -2,6 +2,8 @@
 //! command channel, prompt turns, and config-option folding; plus
 //! typed-result injection and run-end teardown.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,15 +19,17 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::core::config::AgentSpec;
 use crate::core::events::{PlanEntry, PlanStatus, SessionEvent};
-use crate::core::ports::{BridgeConfig, EventSink, HeadlessPolicy, InteractionPolicy};
+use crate::core::ports::{
+    AgentTransport, BridgeConfig, EventSink, HeadlessPolicy, InteractionPolicy,
+};
+use crate::core::session::{
+    SessionCmd, SessionError, SessionHandle, SessionOptions, TurnError, TurnOutcome, UsageCounts,
+};
 use crate::core::turn::{PeekInputs, TurnFold, status_string, submission_sink};
 use crate::result_wire::{bind_result_socket, spawn_result_channel};
 
 use super::process::{self, kill_and_reap};
 use super::proto;
-use super::{
-    SessionCmd, SessionError, SessionHandle, SessionOptions, TurnError, TurnOutcome, UsageCounts,
-};
 
 /// How long a timed-out prompt waits for the (cancelled) response before
 /// raising the timeout error to the script anyway.
@@ -291,6 +295,21 @@ pub async fn start_session(
                 "driver exited before ready".into(),
             ))
         }
+    }
+}
+
+/// The ACP stdio transport: [`AgentTransport`] over the process/proto/
+/// driver interior.
+pub struct Transport;
+
+impl AgentTransport for Transport {
+    fn start_session<'a>(
+        &'a self,
+        spec: &'a AgentSpec,
+        opts: SessionOptions,
+        sink: Arc<dyn EventSink>,
+    ) -> Pin<Box<dyn Future<Output = Result<SessionHandle, SessionError>> + 'a>> {
+        Box::pin(start_session(spec, opts, sink))
     }
 }
 
