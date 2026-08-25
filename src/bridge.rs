@@ -27,7 +27,7 @@ use rmcp::serve_server;
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::transport::io::stdio;
 
-use crate::result_contract;
+use crate::result_wire;
 
 /// Name of the injected server (agents derive `mcp__ponos__result_submit`).
 pub const SERVER_NAME: &str = "ponos";
@@ -78,13 +78,13 @@ impl BridgeServer {
         let mut guard = self.conn.lock().await;
         if guard.is_none() {
             *guard = Some(
-                result_contract::connect(&self.socket)
+                result_wire::connect(&self.socket)
                     .await
                     .map_err(|e| format!("cannot reach result channel: {e}"))?,
             );
         }
         let stream = guard.as_mut().expect("just connected");
-        match result_contract::submit_over_socket(stream, value).await {
+        match result_wire::submit_over_socket(stream, value).await {
             Ok(verdict) => Ok(verdict),
             Err(e) => {
                 // Stale connection (session closed underneath): drop it so

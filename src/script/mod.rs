@@ -351,7 +351,7 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                             mlua::Error::runtime(format!("invalid result schema: {e}"))
                         })?;
                         Some(
-                            crate::result_contract::ResultContract::compile(json).map_err(|e| {
+                            crate::core::contract::ResultContract::compile(json).map_err(|e| {
                                 mlua::Error::runtime(format!("invalid result schema: {e}"))
                             })?,
                         )

@@ -7,7 +7,7 @@ pub mod cli;
 pub mod config;
 pub mod core;
 pub mod render;
-pub mod result_contract;
+pub mod result_wire;
 pub mod script;
 
 /// Compat re-export: task semantics live in `core::task`.

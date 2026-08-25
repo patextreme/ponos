@@ -40,10 +40,11 @@ use agent_client_protocol::{AcpAgent, ByteStreams, Client, ConnectionTo};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::config::AgentSpec;
+use crate::core::contract::ResultContract;
 use crate::core::text::{LINE_BUDGET, truncate_visible};
 use crate::core::turn::{PeekInputs, TurnFold, status_string, submission_sink};
 use crate::render::{DisplayEvent, Renderer};
-use crate::result_contract::{ResultContract, bind_result_socket, spawn_result_channel};
+use crate::result_wire::{bind_result_socket, spawn_result_channel};
 
 /// How long a timed-out prompt waits for the (cancelled) response before
 /// raising the timeout error to the script anyway.
@@ -327,7 +328,7 @@ pub async fn start_session(
     // set up the channel degrade (result stays nil), never fail the
     // session.
     let mut mcp_servers = opts.mcp_servers.clone();
-    let mut result_channel: Option<crate::result_contract::ResultChannel> = None;
+    let mut result_channel: Option<crate::result_wire::ResultChannel> = None;
     if let Some(contract) = opts.result.clone() {
         match std::env::current_exe() {
             Ok(exe) => match bind_result_socket().await {

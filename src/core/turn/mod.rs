@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::v1::{ToolCallLocation, ToolKind, ToolCallUpdateFields};
 
 use crate::core::text::{LINE_BUDGET, truncate_visible};
-use crate::result_contract::SubmissionSink;
+use crate::core::contract::SubmissionSink;
 
 /// The in-flight turn's accumulator, folded on the connection's dispatch
 /// loop (in wire order, before the response is delivered).
