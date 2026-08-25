@@ -47,9 +47,12 @@ exit codes, or output bytes change. `skip_specs: true` is set in
   crate map in design.md; `src/main.rs` + `src/bin/mock-agent/` land in
   `crates/ponos-cli/`. Module contents are moved, not rewritten.
 - **Tests**: `tests/` move to `crates/ponos-cli/tests/` unchanged except the
-  two `RunConfig` literal sites (`tests/script.rs`, `tests/e2e.rs`) gain the
-  mechanical `transport:` line; zero expectation changes. `examples/`
-  untouched.
+  three `RunConfig` literal sites (`tests/script.rs`, `tests/e2e.rs`,
+  `tests/acp.rs`) gain the mechanical `transport:` line, and the two tests
+  that locate repo-rooted files via `env!("CARGO_MANIFEST_DIR")` re-root
+  with `../../` (`tests/examples.rs` → `examples/`, `tests/cli.rs` →
+  `.ponos/ponos.d.luau`, since the manifest dir moves under `crates/`);
+  zero expectation changes. `examples/` untouched.
 - **Build**: root `Cargo.toml` becomes workspace-only; nix flake/crane
   source filtering updated per crate; pinned nightly toolchain unchanged.
 - **Followed by**: change ③ (`hexagonal-polish` exploration) — dependency

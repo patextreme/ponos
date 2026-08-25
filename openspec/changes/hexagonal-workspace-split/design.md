@@ -58,12 +58,12 @@ Facts that corrected the exploration draft: `config_fs.rs` is 155 lines with
 | Crate | Contents (from ①'s tree) | Depends on |
 |---|---|---|
 | `ponos-core` | `core/`: config model, contract, events, ports, task, text, turn, session, error | serde, serde_json, jsonschema; **data-level**: mlua (`task`), agent-client-protocol (`turn`/`session`/`ports`), tokio::sync |
-| `ponos-acp` | `acp/`: process, proto, driver | core, result, agent-client-protocol, async-process, futures |
-| `ponos-luau` | `script/`: sandbox, bindings, state, run, require | core, mlua |
+| `ponos-acp` | `acp/`: process, proto, driver | core, result, agent-client-protocol, async-process, futures, tokio, tracing, libc |
+| `ponos-luau` | `script/`: sandbox, bindings, state, run, require | core, mlua, serde, serde_json, agent-client-protocol (schema types, data-level), tokio, futures |
 | `ponos-check` | `check.rs`, `check/`: defs, lint; `TYPE_DEFINITIONS` | core, mlua, full-moon |
 | `ponos-config` | `config_fs.rs` — TOML parse + discovery, the only `ConfigSource` impl | core, toml |
 | `ponos-render` | `render/` | core (jiff joins here from cli's dep set) |
-| `ponos-result` | `result_wire.rs` — UDS channel + submit/verdict protocol (both halves) | core, tokio, serde, serde_json |
+| `ponos-result` | `result_wire.rs` — UDS channel + submit/verdict protocol (both halves) | core, tokio, serde, serde_json, tracing |
 | `ponos-cli` | `cli.rs`, `bridge.rs`, `main.rs`, `bin/mock-agent/`, `lib.rs` facade, `tests/` | everything; clap, rmcp, libc, tracing, tracing-subscriber, jiff |
 
 Rationale for the two deviations from the exploration draft:
@@ -87,15 +87,23 @@ optional `ponos-luau → ponos-acp` dep (declared arrow + cfg wart, rejected).
 
 ### D2 — Transport injection kills the `script → acp` arrow
 
-`RunConfig` gains `transport: Arc<dyn AgentTransport>` (a `Default`
-impl composes it lazily so non-test callers are unaffected). The
-`default_transport()` line moves from `script/state.rs` into `ponos-cli`
-composition. **Gate amendment** (Q1a): ②'s original "tests byte-identical"
-acceptance is amended to "byte-identical except the mechanical `transport:`
-line at the two `RunConfig` literal sites (`tests/script.rs`,
-`tests/e2e.rs`); zero expectation changes; `examples/` untouched". The gate
-was a proxy for no-behavior-change; a constructor-arity mechanical addition
-to make an arrow die does not breach it.
+`RunConfig` gains `transport: Arc<dyn AgentTransport>` as a required
+field — no `Default` impl: it would be orphan-rule-blocked in `ponos-cli`
+and arrow-recreating in `ponos-luau`. The `default_transport()`
+composition moves from `script/state.rs` into `ponos-cli`; `cli.rs`'s own
+`RunConfig` literal is the fourth and last construction site. **Gate
+amendment** (Q1a): ②'s original "tests byte-identical" acceptance is
+amended to "byte-identical except five mechanical lines: the `transport:`
+line at the three `RunConfig` literal sites (`tests/script.rs`,
+`tests/e2e.rs`, `tests/acp.rs`), plus the two `env!("CARGO_MANIFEST_DIR")`
+joins that re-root to the workspace root — `tests/examples.rs`
+(`examples/`) and `tests/cli.rs` (`.ponos/ponos.d.luau`) both need
+`../../` because the manifest dir moves to `crates/ponos-cli` while
+their targets stay at the repo root (`tests/types.rs`'s target moves
+with the tests and is unaffected); zero expectation changes; `examples/`
+untouched". The gate
+was a proxy for no-behavior-change; constructor-arity and path-re-root
+mechanical edits to make an arrow die do not breach it.
 
 Alternatives: keep the arrow as a documented crate-level exception (defeats
 the change's purpose; ③ is lints+docs only and cannot absorb it); optional
@@ -125,7 +133,10 @@ surface" remains a behavioral contract (AGENTS.md), not a packaging one.
   grep-test floor + workspace lints as its enforcement floor).
 - Nix/crane: source filtering extended to `crates/**`; `examples/`,
   `skills/`, and test sources stay in the filtered source so
-  `tests/examples.rs` and the offline suite pass in the sandbox. Cargo
+  `tests/examples.rs` and the offline suite pass in the sandbox. The two
+  `package.version` reads in nix (`package.nix`, `checks.nix`) repoint to
+  `crates/ponos-cli/Cargo.toml` — the root manifest becomes workspace-only
+  and loses `[package]`. Cargo
   lockfile regenerated as part of the move; toolchain pin untouched.
 - Module moves are `git mv` where possible so history follows; intra-crate
   `crate::` paths become `ponos_core::`-style extern paths mechanically.
@@ -137,8 +148,12 @@ surface" remains a behavioral contract (AGENTS.md), not a packaging one.
   add `crates/` roots wholesale rather than per-file exclusion; acceptance
   gate is `nix flake check`, run before declaring done.
 - [`RunConfig` field addition breaks a test literal not yet found] →
-  verified: exactly two sites (`tests/script.rs`, `tests/e2e.rs`); gate
-  wording pins the exception so review can check it.
+  verified: exactly three sites (`tests/script.rs`, `tests/e2e.rs`,
+  `tests/acp.rs` — the only `RunConfig {` literals outside `src/cli.rs`);
+  also verified: the only other move-sensitive test lines are the two
+  `env!("CARGO_MANIFEST_DIR")` joins (`tests/examples.rs`,
+  `tests/cli.rs`; `tests/types.rs`'s target moves with the tests);
+  gate wording pins all five exceptions so review can check it.
 - [Workspace split changes lockfile/features (e.g. feature unification
   shifts mlua/rmcp builds) → build breaks offline] → pin feature sets
   per-member exactly as today's single-crate `Cargo.toml` lists them;
