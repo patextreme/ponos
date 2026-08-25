@@ -5,9 +5,12 @@ pub mod bridge;
 pub mod check;
 pub mod cli;
 pub mod config;
+pub mod core;
 pub mod render;
 pub mod result_contract;
 pub mod script;
-pub mod task;
+
+/// Compat re-export: task semantics live in `core::task`.
+pub use crate::core::task;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

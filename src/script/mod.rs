@@ -15,28 +15,15 @@ use mlua::{Function, Lua, LuaOptions, MultiValue, StdLib, Table, Value};
 
 use crate::acp::{self, SessionHandle, SessionOptions};
 use crate::config::{AgentSpec, Registry};
+use crate::core::error::ExitSignal;
+use crate::core::task::{self, TaskRegistry, TaskState};
 use crate::render::Renderer;
-use crate::task::{self, TaskRegistry, TaskState};
 
 use agent_client_protocol::schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
 };
 
 use require::ScriptRequirer;
-
-/// Signals `ponos.exit(code)`: unwinds the run; the code wins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExitSignal {
-    pub code: i32,
-}
-
-impl std::fmt::Display for ExitSignal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ponos.exit({})", self.code)
-    }
-}
-
-impl std::error::Error for ExitSignal {}
 
 /// Everything the Lua environment needs, shared per run (single-threaded).
 pub struct RuntimeState {
