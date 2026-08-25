@@ -16,7 +16,7 @@
     };
 
     # Dependencies are built from the cargo-only source so the artifact
-    # cache stays insensitive to edits in src/, types/, examples/, ...
+    # cache stays insensitive to edits in src/, .ponos/, examples/, ...
     # Keep these arguments byte-identical to the ones in checks.nix: both
     # then evaluate to the same derivation and the deps build once.
     cargoArtifacts = craneLib.buildDepsOnly (commonArgs
@@ -25,7 +25,7 @@
       });
   in {
     # Full shared source (config.ponosSrc): the crate embeds
-    # types/ponos.d.luau at compile time, so a cargo-only source filter
+    # .ponos/ponos.d.luau at compile time, so a cargo-only source filter
     # breaks this build (while the deps build and tests still pass).
     packages.ponos = craneLib.buildPackage (commonArgs
       // {

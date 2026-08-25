@@ -24,28 +24,22 @@ ponos SHALL capture the `configOptions` array from each `session/new` response a
 - **WHEN** the agent sends a `session/update` carrying `config_option_update` mid-session
 - **THEN** subsequent `session:configOptions()` calls report the new option state
 
-### Requirement: Config applied at session creation
-`agent:session(options)` SHALL accept a `config` option: a Luau table whose keys are config-option ids and whose values are strings (select value ids) or booleans. After the agent session is created and before the `session()` call returns, ponos SHALL apply each entry as one `session/set_config_option` request, identical in wire form and value typing to a `setConfig` call. The application order across entries SHALL be unspecified: scripts MUST NOT rely on any ordering. ponos SHALL NOT validate keys or values locally against the session's advertised option state; the agent's response is authoritative.
+### Requirement: Constructor config key is rejected
+`agent:session(options)` SHALL reject a `config` key in the options table
+(whether populated or empty) by raising a catchable Lua error before any
+agent subprocess is spawned. The error message SHALL name the removed `config`
+option and direct the author to `setConfig` calls after session creation,
+including the sequencing guidance to set driving options (e.g. `model`) first
+when the agent has dependent options. No other unknown option key SHALL be
+rejected by this rule.
 
-#### Scenario: Model pinned at creation
-- **WHEN** `agent:session({ config = { model = "opus" } })` is called and the agent accepts the value
-- **THEN** the constructor returns a session whose `model` option is set, and the first prompt runs under that setting
+#### Scenario: Config key errors before spawn
+- **WHEN** `agent:session({ config = { model = "opus" } })` is called
+- **THEN** the `session()` call raises a catchable Lua error mentioning `config` and `setConfig`, and no agent subprocess is spawned
 
-#### Scenario: Multiple options at once
-- **WHEN** `agent:session({ config = { model = "haiku", verbose = true } })` is called and the agent accepts both
-- **THEN** both options are set on the session before the constructor returns, regardless of the order in which the entries are applied
-
-#### Scenario: Agent rejection fails the constructor
-- **WHEN** `agent:session({ config = { model = "no-such-model" } })` is called and the agent rejects the value
-- **THEN** the `session()` call raises a catchable Lua error carrying the config id and the agent's message, and the spawned agent subprocess is torn down
-
-#### Scenario: Non-string-or-boolean value fails before spawn
-- **WHEN** `agent:session({ config = { model = 42 } })` is called
-- **THEN** the `session()` call raises a Lua error naming the invalid entry, before any agent subprocess is spawned
-
-#### Scenario: Config composes with later setConfig
-- **WHEN** a session is created with `config = { model = "opus" }` and the script later calls `s:setConfig("model", "haiku")`
-- **THEN** the later call applies as usual and the prompt-outcome option state reflects the new value
+#### Scenario: Empty config table errors identically
+- **WHEN** `agent:session({ config = {} })` is called
+- **THEN** the `session()` call raises the same rejection error as a populated table
 
 ### Requirement: Session API exposes config options
 Session objects SHALL provide `configOptions()` returning the session's live option state as an array (empty when the agent offers none). Each entry SHALL carry `id`, `name`, `type` (`"select"` or `"boolean"`), `currentValue` (string or boolean), optional `category` (nil when the agent omits it), and — for select options — an `options` array of `{ id, name, description? }` choices.
@@ -59,7 +53,7 @@ Session objects SHALL provide `configOptions()` returning the session's live opt
 - **THEN** `s:configOptions()` returns an empty table
 
 ### Requirement: setConfig changes options between turns
-Session objects SHALL provide `setConfig(id, value)` accepting a string (select value id) or boolean value; any other Luau type SHALL raise a Lua error before anything is sent. `setConfig` SHALL be serialized with prompt turns on the same session: a call issued while a turn is in flight waits for that turn to complete, so config changes apply strictly between turns. On agent rejection or unsupported-method error, `setConfig` SHALL raise a Lua error carrying the agent's message; on success it SHALL update the session's option state from the response and return nil.
+Session objects SHALL provide `setConfig(id, value)` accepting a string (select value id) or boolean value; any other Luau type SHALL raise a Lua error before anything is sent. `setConfig` SHALL be serialized with prompt turns on the same session: a call issued while a turn is in flight waits for that turn to complete, so config changes apply strictly between turns. Sequential `setConfig` calls SHALL be applied in the order the script awaits them, making dependent-option sequencing script-controlled: the agent's response state (including any dependent option the agent re-derives) is authoritative after each call. On agent rejection or unsupported-method error, `setConfig` SHALL raise a Lua error carrying the agent's message; on success it SHALL update the session's option state from the response and return nil.
 
 #### Scenario: Switching model before first prompt
 - **WHEN** `s:setConfig("model", "claude-haiku-4-5")` succeeds on a fresh session
@@ -68,6 +62,10 @@ Session objects SHALL provide `setConfig(id, value)` accepting a string (select 
 #### Scenario: Mid-turn setConfig waits
 - **WHEN** `setConfig` is called while a prompt turn is in flight on the same session
 - **THEN** the `session/set_config_option` request is sent only after the in-flight turn completes
+
+#### Scenario: Sequencing is script-controlled
+- **WHEN** a script awaits `s:setConfig("model", "m1")` and then `s:setConfig("effort", "high")` on an agent that re-derives `effort` when `model` is set
+- **THEN** the `effort` set is applied after the `model` set and the session's final option state reports `effort` as `high`
 
 #### Scenario: Agent rejects the value
 - **WHEN** the agent returns an error for `session/set_config_option`

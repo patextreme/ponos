@@ -22,12 +22,37 @@ const PALETTE: [&str; 6] = [
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
 
-/// Local wall-clock time as 24-hour `HH:MM:SS`, prefixed to every
+/// Visible-char budget shared by prompt lines and tool input peeks
+/// (render-logging capability: one truncation constant).
+pub const LINE_BUDGET: usize = 120;
+
+/// Truncate to at most `budget` visible characters, marking the cut with
+/// a trailing `…`. Unicode-safe: the cut lands on char boundaries
+/// (`char_indices`); ANSI sequences never appear in these payloads, so a
+/// char cut suffices. Text at or under the budget passes through
+/// unchanged.
+pub fn truncate_visible(text: &str, budget: usize) -> std::borrow::Cow<'_, str> {
+    match text.char_indices().nth(budget) {
+        // The (budget+1)-th char exists: cut before its byte offset.
+        Some((idx, _)) => std::borrow::Cow::Owned(format!("{}…", &text[..idx])),
+        None => std::borrow::Cow::Borrowed(text),
+    }
+}
+
+/// Local wall-clock time as `yyyy-mm-dd HH:MM:SS`, prefixed to every
 /// rendered line. Taken at write time: the producers of display events
 /// have no event time distinct from render time.
-fn hhmmss() -> String {
+fn timestamp() -> String {
     let now = jiff::Zoned::now();
-    format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second())
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        now.year(),
+        now.month(),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    )
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -120,7 +145,7 @@ impl Renderer {
     }
 
     fn prefixed_line(&self, inner: &mut Inner, label: &str, line: &str) {
-        let ts = hhmmss();
+        let ts = timestamp();
         if self.opts.no_color {
             let _ = writeln!(inner.out, "{ts} [{label}] {line}");
         } else {
@@ -132,7 +157,7 @@ impl Renderer {
     /// `[ponos]` diagnostic line (lifecycle, script log): timestamped but
     /// never label-colored.
     fn ponos_line(&self, inner: &mut Inner, msg: &str) {
-        let ts = hhmmss();
+        let ts = timestamp();
         if self.opts.no_color {
             let _ = writeln!(inner.out, "{ts} [ponos] {msg}");
         } else {
@@ -230,5 +255,51 @@ impl Renderer {
             self.prefixed_line(&mut inner, label, &line);
         }
         let _ = inner.out.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `yyyy-mm-dd HH:MM:SS`: fixed width 19, digits and separators in
+    /// the right slots (render-logging "Timestamp shape").
+    #[test]
+    fn timestamp_shape_is_date_prefixed() {
+        let ts = timestamp();
+        let b = ts.as_bytes();
+        assert_eq!(ts.len(), 19, "fixed width: {ts:?}");
+        let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
+        assert!(digits(0..4) && b[4] == b'-', "year: {ts:?}");
+        assert!(digits(5..7) && b[7] == b'-', "month: {ts:?}");
+        assert!(digits(8..10) && b[10] == b' ', "day: {ts:?}");
+        assert!(digits(11..13) && b[13] == b':', "hour: {ts:?}");
+        assert!(digits(14..16) && b[16] == b':', "minute: {ts:?}");
+        assert!(digits(17..19), "second: {ts:?}");
+    }
+
+    #[test]
+    fn truncate_visible_short_text_untouched() {
+        assert_eq!(truncate_visible("", 120), "");
+        assert_eq!(truncate_visible("git status", 120), "git status");
+    }
+
+    #[test]
+    fn truncate_visible_boundary_lengths() {
+        let budget = 8;
+        // Exactly the budget: untouched.
+        assert_eq!(truncate_visible("12345678", budget), "12345678");
+        // One over: the budget's worth of chars plus the marker.
+        assert_eq!(truncate_visible("123456789", budget), "12345678…");
+        assert_eq!(truncate_visible("1234567890", budget), "12345678…");
+    }
+
+    #[test]
+    fn truncate_visible_cuts_multi_byte_chars_safely() {
+        // 2-byte chars: the cut lands between é's, never mid-codepoint.
+        assert_eq!(truncate_visible("éééé", 3), "ééé…");
+        // 4-byte emoji likewise.
+        assert_eq!(truncate_visible("a😀b😀c", 3), "a😀b…");
+        assert_eq!(truncate_visible("😀😀", 2), "😀😀");
     }
 }

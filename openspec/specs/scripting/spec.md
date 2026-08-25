@@ -29,7 +29,7 @@ Scripts SHALL be able to `require` modules by relative path from the requiring f
 - **THEN** the require call raises a Lua error naming the unresolved path
 
 ### Requirement: Agent and session API
-The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), `mcpServers`, `resultSchema` (a JSON Schema expressed as a Luau table; the option's semantics are specified by the typed-results capability), and `config` (a Luau table mapping config-option ids to string or boolean values; the option's semantics are specified by the session-config-options capability). Two `ponos.agent` calls for the same name SHALL return independent factory objects.
+The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), `mcpServers`, and `resultSchema` (a JSON Schema expressed as a Luau table; the option's semantics are specified by the typed-results capability). Two `ponos.agent` calls for the same name SHALL return independent factory objects.
 
 #### Scenario: Session creation
 - **WHEN** a script calls `ponos.agent("claude"):session({ id = "reviewer" })`

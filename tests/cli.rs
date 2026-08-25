@@ -28,7 +28,9 @@ impl Project {
         if !agent_env.is_empty() {
             config.push_str("\n[agents.mock.env]\n");
             for (k, v) in agent_env {
-                config.push_str(&format!("{k} = \"{v}\"\n"));
+                // TOML literal strings: env values carry JSON (double
+                // quotes) without escaping.
+                config.push_str(&format!("{k} = '{v}'\n"));
             }
         }
         std::fs::write(dir.join(".ponos").join("config.toml"), config).unwrap();
@@ -39,6 +41,19 @@ impl Project {
         let path = self.dir.join("main.luau");
         std::fs::write(&path, body).unwrap();
         path
+    }
+
+    /// Rewrite the agent env (same format as `new`), for env values that
+    /// depend on the project's own directory (peek path fixtures).
+    fn set_env(&self, agent_env: &[(&str, &str)]) {
+        let mut config = format!("[agents.mock]\ncommand = \"{}\"\nargs = []\n", mock_bin());
+        if !agent_env.is_empty() {
+            config.push_str("\n[agents.mock.env]\n");
+            for (k, v) in agent_env {
+                config.push_str(&format!("{k} = '{v}'\n"));
+            }
+        }
+        std::fs::write(self.dir.join(".ponos").join("config.toml"), config).unwrap();
     }
 
     fn run(&self, script: &PathBuf, flags: &[&str]) -> (i32, String, String) {
@@ -81,7 +96,7 @@ fn types_prints_version_header_and_definitions() {
         format!("-- ponos {} type definitions", env!("CARGO_PKG_VERSION"))
     );
     let repo_defs = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("types/ponos.d.luau"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ponos/ponos.d.luau"),
     )
     .unwrap();
     assert_eq!(body, repo_defs, "emitted defs must be byte-identical");
@@ -469,29 +484,33 @@ fn tool_line_direct_completion_measures_from_first_observation() {
 }
 
 // ---------------------------------------------------------------------------
-// Timestamps (cli spec: rendered lines are timestamped)
+// Timestamps (render-logging / cli spec: rendered lines carry a full
+// date timestamp)
 // ---------------------------------------------------------------------------
 
-/// `true` for `HH:MM:SS` at the start of a (plain) line.
-fn starts_with_hhmmss(line: &str) -> bool {
+/// `true` for `yyyy-mm-dd HH:MM:SS` at the start of a (plain) line.
+fn starts_with_dated_ts(line: &str) -> bool {
     let b = line.as_bytes();
-    b.len() >= 8
-        && b[0].is_ascii_digit()
-        && b[1].is_ascii_digit()
-        && b[2] == b':'
-        && b[3].is_ascii_digit()
-        && b[4].is_ascii_digit()
-        && b[5] == b':'
-        && b[6].is_ascii_digit()
-        && b[7].is_ascii_digit()
+    b.len() >= 19
+        && b[0..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[7] == b'-'
+        && b[8..10].iter().all(u8::is_ascii_digit)
+        && b[10] == b' '
+        && b[11..13].iter().all(u8::is_ascii_digit)
+        && b[13] == b':'
+        && b[14..16].iter().all(u8::is_ascii_digit)
+        && b[16] == b':'
+        && b[17..19].iter().all(u8::is_ascii_digit)
 }
 
 #[test]
 fn rendered_lines_carry_plain_timestamps_under_no_color() {
     // cli spec "Rendered lines are timestamped" + "No-color keeps plain
-    // timestamps": every renderer line (chunk, tool, plan, usage,
-    // ponos.log) begins `HH:MM:SS [` with no ANSI anywhere; script print
-    // output is byte-identical.
+    // timestamps": every renderer line (prompt, chunk, tool, plan, usage,
+    // ponos.log) begins `yyyy-mm-dd HH:MM:SS [` with no ANSI anywhere;
+    // script print output is byte-identical.
     let project = Project::new(
         "ts-plain",
         &[
@@ -521,8 +540,8 @@ s:close()
         }
         saw_rendered = true;
         assert!(
-            starts_with_hhmmss(line) && line[8..].starts_with(" ["),
-            "line misses `HH:MM:SS [` prefix: {line:?}\n{stdout}"
+            starts_with_dated_ts(line) && line[19..].starts_with(" ["),
+            "line misses `yyyy-mm-dd HH:MM:SS [` prefix: {line:?}\n{stdout}"
         );
     }
     assert!(saw_print, "print line missing:\n{stdout}");
@@ -542,8 +561,315 @@ fn rendered_lines_carry_dimmed_timestamps_under_color() {
         .unwrap_or_else(|| panic!("chunk line missing:\n{stdout}"));
     assert!(
         chunk_line.starts_with("\x1b[2m")
-            && starts_with_hhmmss(&chunk_line[4..])
-            && chunk_line[12..].starts_with("\x1b[0m ["),
+            && starts_with_dated_ts(&chunk_line[4..])
+            && chunk_line[23..].starts_with("\x1b[0m ["),
         "timestamp not dimmed-leading: {chunk_line:?}\n{stdout}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Prompt lines (render-logging spec: "Prompt turns render a prompt line")
+// ---------------------------------------------------------------------------
+
+/// Bodies of the rendered `prompt: …` lines, timestamps stripped.
+fn prompt_bodies(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(common::strip_timestamp)
+        .filter_map(|l| l.split_once("] prompt: ").map(|(_, body)| body.to_string()))
+        .collect()
+}
+
+#[test]
+fn prompt_line_renders_once_per_turn_with_attribution() {
+    // One `prompt:` line per turn, at send time (before the turn's other
+    // output), attributed to the sending session, whitespace collapsed.
+    let project = Project::new("prompt-line", &[("MOCK_CHUNKS", "answer")]);
+    let script = project.script(
+        r#"
+local s = ponos.agent("mock"):session()
+s:prompt("review\n  the   auth module\nfor drift")
+s:prompt("second turn")
+s:close()
+"#,
+    );
+    let (code, stdout, _) = project.run(&script, &["--no-color"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert_eq!(
+        prompt_bodies(&stdout),
+        vec![
+            "review the auth module for drift".to_string(),
+            "second turn".to_string(),
+        ],
+        "exactly one prompt line per turn, collapsed:\n{stdout}"
+    );
+    // The first prompt line carries session attribution and precedes the
+    // turn's streamed output.
+    let stripped: Vec<&str> = stdout.lines().map(common::strip_timestamp).collect();
+    let prompt_at = stripped
+        .iter()
+        .position(|l| *l == "[mock/s1] prompt: review the auth module for drift")
+        .unwrap_or_else(|| panic!("attributed prompt line missing:\n{stdout}"));
+    let chunk_at = stripped
+        .iter()
+        .position(|l| *l == "[mock/s1] answer")
+        .unwrap_or_else(|| panic!("chunk line missing:\n{stdout}"));
+    assert!(
+        prompt_at < chunk_at,
+        "prompt line must precede output:\n{stdout}"
+    );
+}
+
+#[test]
+fn prompt_line_truncates_long_prompts() {
+    // "Long prompt truncated": the first budget's worth of collapsed
+    // text followed by `…` and no more.
+    let project = Project::new("prompt-trunc", &[("MOCK_CHUNKS", "ok")]);
+    let script = project.script(
+        r#"
+local s = ponos.agent("mock"):session()
+s:prompt(string.rep("a", 130) .. " tail")
+s:close()
+"#,
+    );
+    let (code, stdout, _) = project.run(&script, &["--no-color"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert_eq!(
+        prompt_bodies(&stdout),
+        vec![format!("{}…", "a".repeat(120))],
+        "budget + marker, nothing more:\n{stdout}"
+    );
+}
+
+#[test]
+fn quiet_suppresses_the_prompt_line() {
+    let project = Project::new("prompt-quiet", &[("MOCK_CHUNKS", "streamed")]);
+    let script = project.script(
+        r#"
+print("script-said-this")
+local s = ponos.agent("mock"):session()
+s:prompt("hi")
+s:close()
+"#,
+    );
+    let (code, stdout, _) = project.run(&script, &["--quiet"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(
+        !stdout.contains("prompt:"),
+        "quiet must suppress:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("script-said-this"),
+        "print survives:\n{stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tool input peeks (render-logging spec: "Tool lines carry an input peek"
+// and "Peek paths render session-relative")
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_peek_appends_the_command() {
+    // "Execute kind shows the command": `tool: bash git status` and the
+    // terminal line carrying the same peek.
+    let project = Project::new(
+        "peek-exec",
+        &[
+            ("MOCK_TOOL_FLOW", "pending,in_progress,completed"),
+            ("MOCK_TOOL_TITLE", "bash"),
+            ("MOCK_TOOL_KIND", "execute"),
+            ("MOCK_TOOL_RAW_INPUT", "{\"command\": \"git status\"}"),
+        ],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    let lines = tool_bodies(&stdout);
+    assert_eq!(lines.len(), 2, "start + terminal:\n{stdout}");
+    assert_eq!(lines[0], "bash git status", "start line:\n{stdout}");
+    assert!(
+        lines[1].starts_with("bash git status (completed, ") && lines[1].ends_with("s)"),
+        "terminal line:\n{stdout}"
+    );
+}
+
+#[test]
+fn read_peek_shortens_path_under_session_cwd() {
+    // "Read kind shows the location path" + "Path under session cwd":
+    // the default session cwd is the invocation dir (= the project dir).
+    let project = Project::new("peek-read", &[]);
+    project.set_env(&[
+        ("MOCK_TOOL_FLOW", "pending,in_progress"),
+        ("MOCK_TOOL_TITLE", "read"),
+        ("MOCK_TOOL_KIND", "read"),
+        (
+            "MOCK_TOOL_LOCATIONS",
+            &format!("{}/src/render/mod.rs:118", project.dir.display()),
+        ),
+    ]);
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    assert_eq!(
+        tool_bodies(&stdout),
+        vec!["read src/render/mod.rs:118".to_string()],
+        "cwd-relative path with :line:\n{stdout}"
+    );
+}
+
+#[test]
+fn peek_path_outside_cwd_collapses_under_home() {
+    // "Path outside session cwd but under home" → `~/notes/todo.md`,
+    // while a path outside home entirely stays as received.
+    let under_home = format!("{}/notes/todo.md", home_dir_string());
+    let project = Project::new(
+        "peek-home",
+        &[
+            ("MOCK_TOOL_FLOW", "pending,in_progress"),
+            ("MOCK_TOOL_TITLE", "edit"),
+            ("MOCK_TOOL_KIND", "edit"),
+            ("MOCK_TOOL_LOCATIONS", &under_home),
+        ],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    assert_eq!(
+        tool_bodies(&stdout),
+        vec!["edit ~/notes/todo.md".to_string()],
+        "~-collapsed path:\n{stdout}"
+    );
+
+    let project = Project::new(
+        "peek-abs",
+        &[
+            ("MOCK_TOOL_FLOW", "pending,in_progress"),
+            ("MOCK_TOOL_TITLE", "read"),
+            ("MOCK_TOOL_KIND", "read"),
+            ("MOCK_TOOL_LOCATIONS", "/tmp/build.log"),
+        ],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    assert_eq!(
+        tool_bodies(&stdout),
+        vec!["read /tmp/build.log".to_string()],
+        "outside home stays as received:\n{stdout}"
+    );
+}
+
+#[test]
+fn unknown_kind_falls_back_to_compact_raw_input_json() {
+    // "Unknown tool falls back to compact raw input".
+    let project = Project::new(
+        "peek-json",
+        &[
+            ("MOCK_TOOL_FLOW", "pending,in_progress"),
+            ("MOCK_TOOL_TITLE", "grep"),
+            ("MOCK_TOOL_RAW_INPUT", "{\"pattern\": \"foo\"}"),
+        ],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    assert_eq!(
+        tool_bodies(&stdout),
+        vec!["grep {\"pattern\":\"foo\"}".to_string()],
+        "compact JSON peek:\n{stdout}"
+    );
+}
+
+#[test]
+fn peek_contained_in_the_title_is_not_duplicated() {
+    // "Title already contains the peek": pi-acp-style bash titles are the
+    // command itself, so the peek must not append a duplicate.
+    let project = Project::new(
+        "peek-dedup",
+        &[
+            ("MOCK_TOOL_FLOW", "pending,in_progress,completed"),
+            ("MOCK_TOOL_TITLE", "git status"),
+            ("MOCK_TOOL_KIND", "execute"),
+            ("MOCK_TOOL_RAW_INPUT", "{\"command\": \"git status\"}"),
+        ],
+    );
+    let stdout = run_prompt_script(&project, &["--no-color"]);
+    let lines = tool_bodies(&stdout);
+    assert_eq!(lines.len(), 2, "start + terminal:\n{stdout}");
+    assert_eq!(lines[0], "git status", "no duplication on start:\n{stdout}");
+    assert!(
+        lines[1].starts_with("git status (completed, "),
+        "no duplication on terminal:\n{stdout}"
+    );
+}
+
+#[test]
+fn readme_output_example_lines_match_e2e_output() {
+    // The README "Output format" example, reproduced line-for-line
+    // (timestamps stripped; durations are live so only prefixes are
+    // exact there). Two mock agents stand in for one claude session's
+    // bash + read activity: knob env is per agent process.
+    let dir = std::env::temp_dir().join(format!("ponos-cli-doc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".ponos")).unwrap();
+    let config = format!(
+        "[agents.bash]\ncommand = \"{mock}\"\nargs = []\n\
+         \n[agents.bash.env]\nMOCK_TOOL_FLOW = 'pending,in_progress,completed'\n\
+         MOCK_TOOL_TITLE = 'bash'\nMOCK_TOOL_KIND = 'execute'\n\
+         MOCK_TOOL_RAW_INPUT = '{{\"command\": \"git status\"}}'\n\
+         \n[agents.read]\ncommand = \"{mock}\"\nargs = []\n\
+         \n[agents.read.env]\nMOCK_TOOL_FLOW = 'pending,in_progress'\n\
+         MOCK_TOOL_TITLE = 'read'\nMOCK_TOOL_KIND = 'read'\n\
+         MOCK_CHUNKS = 'Looks fine — two nits below.'\n\
+         MOCK_TOOL_LOCATIONS = '{dir}/src/render/mod.rs:118'\n",
+        mock = mock_bin(),
+        dir = dir.display(),
+    );
+    std::fs::write(dir.join(".ponos").join("config.toml"), config).unwrap();
+    let script = dir.join("main.luau");
+    std::fs::write(
+        &script,
+        r#"
+local bash = ponos.agent("bash"):session()
+local read = ponos.agent("read"):session()
+local rb = ponos.spawn(function() return bash:prompt("review the auth module for drift against the spec") end)
+local rr = ponos.spawn(function() return read:prompt("review the auth module for drift against the spec") end)
+rb:await(); rr:await()
+ponos.log("log line from ponos.log")
+bash:close(); read:close()
+"#,
+    )
+    .unwrap();
+    let output = Command::new(ponos_bin())
+        .arg("run")
+        .arg(&script)
+        .arg("--no-color")
+        .current_dir(&dir)
+        .output()
+        .expect("run ponos");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(output.status.success(), "{stdout}");
+    let bodies: Vec<String> = stdout
+        .lines()
+        .map(common::strip_timestamp)
+        .map(|l| {
+            l.split_once("] ")
+                .map(|(_, b)| b.to_string())
+                .unwrap_or_else(|| l.to_string())
+        })
+        .collect();
+    // Each example line appears verbatim (durations are live, so the
+    // terminal line matches by prefix). The two fixture sessions
+    // interleave freely — ordering within one call is pinned by the
+    // dedicated tool-line tests above.
+    let expected = [
+        "prompt: review the auth module for drift against the spec",
+        "tool: bash git status",
+        "tool: bash git status (completed, ",
+        "tool: read src/render/mod.rs:118",
+        "Looks fine — two nits below.",
+        "log line from ponos.log",
+    ];
+    for want in expected {
+        assert!(
+            bodies.iter().any(|b| b.starts_with(want)),
+            "doc example line missing: {want:?}\n{stdout}"
+        );
+    }
+}
+
+/// `$HOME` as a display string (peek path fixtures).
+fn home_dir_string() -> String {
+    std::env::var("HOME").unwrap_or_else(|_| "/home".to_string())
 }

@@ -391,66 +391,94 @@ assert(ponos.sleep ~= nil and ponos.spawn ~= nil and ponos.parallel ~= nil and p
 }
 
 // ---------------------------------------------------------------------------
-// Constructor `config` option (session-config-options capability)
+// Constructor `config` rejection + setConfig sequencing
+// (session-config-options capability)
 // ---------------------------------------------------------------------------
 
-/// Select `model` + boolean `fast` options the mock advertises and mutates.
-const CONFIG_OPTIONS_JSON: &str = r#"[{"id":"model","name":"Model","type":"select","currentValue":"opus","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]},{"id":"fast","name":"Fast mode","type":"boolean","currentValue":false}]"#;
+/// Select `model` + dependent select `effort` options the mock advertises;
+/// with `MOCK_CONFIG_DEPENDENT` a `model` set re-derives `effort` back to
+/// its seeded default (`low`), modeling opencode-style dependent options.
+const CONFIG_OPTIONS_JSON: &str = r#"[{"id":"model","name":"Model","type":"select","currentValue":"opus","options":[{"value":"opus","name":"Opus"},{"value":"haiku","name":"Haiku"}]},{"id":"effort","name":"Effort","type":"select","currentValue":"low","options":[{"value":"low","name":"Low"},{"value":"high","name":"High"}]}]"#;
 
 #[test]
-fn constructor_config_applies_before_first_prompt() {
-    // session-config-options spec "Config applied at session creation":
-    // every entry is applied before the constructor returns (folded into
-    // the live state), so the first prompt runs under the new settings;
-    // a later setConfig composes as usual.
-    let dir = tmpdir("cfg-ctor");
+fn constructor_config_key_rejected_before_spawn() {
+    // session-config-options spec "Config key errors before spawn": the
+    // key itself is the removed API (the command does not exist, so a
+    // spawn would name the command instead — proving the error fires
+    // first). The message teaches the migration: `setConfig` after
+    // session creation, driving options first.
+    let dir = tmpdir("cfg-ctor-reject");
     let script = write_script(
         &dir,
-        &format!(
-            r#"
-local agent = ponos.agent({{ command = "{mock}", env = {{
-    MOCK_CONFIG_OPTIONS = '{json}',
-    MOCK_CONFIG_ECHO = "model",
-}} }})
-local s = agent:session({{ config = {{ model = "haiku", fast = true }} }})
-local options = s:configOptions()
-assert(options[1].currentValue == "haiku", tostring(options[1].currentValue))
-assert(options[2].currentValue == true, tostring(options[2].currentValue))
-local r = s:prompt("go")
-assert(r.text == "haiku", "first prompt must run under the constructor config: " .. r.text)
-s:setConfig("model", "opus")
-local r2 = s:prompt("again")
-assert(r2.text == "opus", "later setConfig must compose: " .. r2.text)
-s:close()
+        r#"
+local agent = ponos.agent({ command = "/nonexistent/ponos-test-agent" })
+local ok, err = pcall(function()
+    return agent:session({ config = { model = "opus" } })
+end)
+assert(not ok, "session() must reject the config key")
+local msg = tostring(err)
+assert(msg:find("config", 1, true), "must name the removed option: " .. msg)
+assert(msg:find("setConfig", 1, true), "must name the replacement: " .. msg)
+assert(not msg:find("/nonexistent", 1, true), "must fail before spawning: " .. msg)
 "#,
-            mock = mock_agent(),
-            json = CONFIG_OPTIONS_JSON
-        ),
     );
     let out = run(&script, &dir);
     assert_eq!(out.code, 0, "error: {:?}", out.error);
 }
 
 #[test]
-fn constructor_config_bad_value_fails_before_spawn() {
-    // session-config-options spec "Non-string-or-boolean value fails
-    // before spawn": the error names the invalid entry and, like the
-    // schema-compile path, fires before any subprocess spawns — the
-    // command does not exist, so a spawn would name the command instead.
-    let dir = tmpdir("cfg-bad-value");
+fn constructor_config_empty_table_rejected_identically() {
+    // session-config-options spec "Empty config table errors identically":
+    // the key itself signals the removed API, so an empty table raises
+    // the same rejection as a populated one (pre-spawn).
+    let dir = tmpdir("cfg-ctor-empty");
     let script = write_script(
         &dir,
         r#"
 local agent = ponos.agent({ command = "/nonexistent/ponos-test-agent" })
 local ok, err = pcall(function()
-    return agent:session({ config = { model = 42 } })
+    return agent:session({ config = {} })
 end)
-assert(not ok, "session() must fail on a non-string-or-boolean config value")
+assert(not ok, "session() must reject even an empty config table")
 local msg = tostring(err)
-assert(msg:find("config.model", 1, true), "must name the entry: " .. msg)
-assert(msg:find("boolean", 1, true), "must name the allowed types: " .. msg)
+assert(msg:find("config", 1, true), "must name the removed option: " .. msg)
+assert(msg:find("setConfig", 1, true), "must name the replacement: " .. msg)
 assert(not msg:find("/nonexistent", 1, true), "must fail before spawning: " .. msg)
 "#,
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn setconfig_sequencing_is_script_controlled() {
+    // session-config-options spec "Sequencing is script-controlled": with
+    // MOCK_CONFIG_DEPENDENT the mock re-derives `effort` to its default
+    // (`low`) on every `model` set, so only author-ordered calls stick —
+    // `model` first, `effort` after — which is exactly the sequencing the
+    // removed constructor `config` table could not express.
+    let dir = tmpdir("cfg-sequencing");
+    let script = write_script(
+        &dir,
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{
+    MOCK_CONFIG_OPTIONS = '{json}',
+    MOCK_CONFIG_DEPENDENT = "1",
+}} }})
+local s = agent:session()
+s:setConfig("model", "haiku") -- re-derives effort to its default
+local mid = s:configOptions()
+assert(mid[2].currentValue == "low", "effort must be re-derived to its default: " .. tostring(mid[2].currentValue))
+s:setConfig("effort", "high") -- applied after the model set
+local options = s:configOptions()
+assert(options[1].currentValue == "haiku", "model after: " .. tostring(options[1].currentValue))
+assert(options[2].currentValue == "high", "effort must hold high after the ordered set: " .. tostring(options[2].currentValue))
+s:close()
+"#,
+            mock = mock_agent(),
+            json = CONFIG_OPTIONS_JSON
+        ),
     );
     let out = run(&script, &dir);
     assert_eq!(out.code, 0, "error: {:?}", out.error);
@@ -490,60 +518,6 @@ fn wait_for_processes(needle: &str, want: usize, what: &str) {
         "expected {what} (count {want}) for processes tagged {needle:?}, got {}",
         count_processes(needle)
     );
-}
-
-#[test]
-fn constructor_config_agent_rejection_tears_down_the_agent() {
-    // session-config-options spec "Agent rejection fails the constructor":
-    // the error carries the config id and the agent's message, and the
-    // agent subprocess is torn down by the constructor — observed live:
-    // the tagged mock appears, then disappears while the script is still
-    // sleeping, so the end-of-run sweep cannot be the reaper. The mock
-    // holds the rejection back for 400 ms (MOCK_CONFIG_REJECT_DELAY_MS),
-    // guaranteeing a wide, observable alive window.
-    let dir = tmpdir("cfg-reject");
-    let token = format!("--ponos-e2e-reject-token-{}", std::process::id());
-    let script = write_script(
-        &dir,
-        &format!(
-            r#"
-local agent = ponos.agent({{
-    command = "{mock}",
-    args = {{ "{token}" }},
-    env = {{
-        MOCK_CONFIG_OPTIONS = '{json}',
-        MOCK_CONFIG_REJECT = "model",
-        MOCK_CONFIG_REJECT_DELAY_MS = "400",
-    }},
-}})
-local ok, err = pcall(function()
-    return agent:session({{ config = {{ model = "haiku" }} }})
-end)
-assert(not ok, "session() must fail when the agent rejects the value")
-local msg = tostring(err)
-assert(msg:find("model", 1, true), "must name the config id: " .. msg)
-assert(msg:find("rejects config id model", 1, true), "must carry the agent message: " .. msg)
-ponos.sleep(3000)
-"#,
-            mock = mock_agent(),
-            token = token,
-            json = CONFIG_OPTIONS_JSON
-        ),
-    );
-    let run_dir = dir.clone();
-    let run_script = script.clone();
-    let runner = std::thread::spawn(move || run(&run_script, &run_dir));
-    wait_for_processes(&token, 1, "agent spawned before the rejected set");
-    wait_for_processes(&token, 0, "agent torn down by the constructor");
-    // The teardown was observed while the script was still in its sleep:
-    // the constructor reaped the process, not the end-of-run sweep.
-    assert!(
-        !runner.is_finished(),
-        "agent vanished before the script finished — the run-end sweep would be the reaper otherwise"
-    );
-    let out = runner.join().unwrap();
-    assert_eq!(out.code, 0, "error: {:?}", out.error);
-    assert_eq!(count_processes(&token), 0, "no process may survive the run");
 }
 
 #[test]

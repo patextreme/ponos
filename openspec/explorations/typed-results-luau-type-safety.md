@@ -13,7 +13,7 @@ Three questions, three answers, all verified empirically against `luau-lsp`
    `Schema<T>` + generic `Session<T>`/`PromptResult<T>` works: the single
    `Schema<Review>` annotation on the schema table binds `T` through inference,
    and every `r.result` use site is then checked. Other formulations fail
-   (details below). Zero runtime changes — pure `types/ponos.d.luau` surface.
+   (details below). Zero runtime changes — pure `.ponos/ponos.d.luau` surface.
 2. **TypeBox-style builder (derive type from schema value): impossible in
    Luau.** No `keyof`, no mapped types, builders can't compose types, and
    `typeof(sample)` is shape-only (singletons widened, no optionals). The
@@ -39,7 +39,7 @@ follow-up); `ponos schemagen` and `ponos.validate` are independent follow-ups.
 submission, `nil` when absent. Everything type-checks, nothing about the
 submission's *shape* is checked: scripts consume `r.result.verdict` as `any`.
 
-Current definitions (`types/ponos.d.luau`) type the seam as:
+Current definitions (`.ponos/ponos.d.luau`) type the seam as:
 
 ```luau
 export type PromptResult = { …, result: any? }
@@ -146,7 +146,7 @@ Verified properties of defsD:
 
 Runtime impact: **none**. The d.luau is an editor/`ponos-analyze` contract
 only; `src/script/` returns plain tables regardless (phantom field never
-exists). Adoption means: update `types/ponos.d.luau`, extend
+exists). Adoption means: update `.ponos/ponos.d.luau`, extend
 `tests/fixtures/types_probe.luau` (a result session end-to-end), extend the
 example, update README's type docs. All already in the change's task list
 shapes.
@@ -309,9 +309,9 @@ code. The sync problem has a cheap layer (witness sample) and a complete one
 
 ## Pointers (verified at time of writing)
 
-- `types/ponos.d.luau` — current `result: any?` / `{ [string]: any }?` seam (the thing to upgrade)
+- `.ponos/ponos.d.luau` — current `result: any?` / `{ [string]: any }?` seam (the thing to upgrade)
 - `openspec/changes/add-typed-agent-results/` — proposal/design/tasks; design.md non-goals ("no schema-builder DSL") now empirically justified
-- `nix/checks.nix:73-94` — `ponos-analyze`: `luau-lsp analyze --platform=standard --definitions=types/ponos.d.luau examples/*.luau tests/fixtures/*.luau` (nixpkgs luau-lsp 1.69.0; same binary at `~/.nix-profile/bin/luau-lsp`)
+- `nix/checks.nix:73-95` — `ponos-analyze`: `luau-lsp analyze --platform=standard --definitions=.ponos/ponos.d.luau examples/*.luau tests/fixtures/*.luau` (nixpkgs luau-lsp 1.69.0; same binary at `~/.nix-profile/bin/luau-lsp`)
 - `tests/types.rs` + `tests/fixtures/types_probe.luau` — runtime probe pattern a defs update must extend
 - `src/cli.rs:53` — `include_str!`d definitions, `ponos types` sync precedent for codegen-artifact guarding
 - `src/script/mod.rs:574`, `src/script/require.rs:155` — source-text ownership boundary (where Rust-side parsing would hook)

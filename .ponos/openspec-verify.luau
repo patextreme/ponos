@@ -1,8 +1,8 @@
 --!strict
 
-const DEFAULT_MODEL = "zai/glm-5.3"
+const DEFAULT_MODEL = "qwencloud/qwen3.8-max"
 const JUDGE_MODEL = "qwencloud/deepseek-v4-flash-0731"
-const CHANGE_NAME = "prompt-text-last-message"
+const CHANGE_NAME = "richer-render-logging"
 
 local predicateAgent = require("./predicate")
 
@@ -10,7 +10,8 @@ local pi: Agent = ponos.agent("pi")
 
 local iteration = 0
 while true do
-	local reviewer: Session = pi:session({ id = `reviewer:{iteration}`, config = { model = DEFAULT_MODEL } })
+	local reviewer: Session = pi:session({ id = `reviewer:{iteration}` })
+	reviewer:setConfig("model", DEFAULT_MODEL)
 
 	local reviewResult = reviewer:prompt(
 		`Verify the implementation of openspec change named {CHANGE_NAME} using the openspec-verify-change skill`
@@ -45,5 +46,6 @@ while true do
 	iteration += 1
 end
 
-local archiver: Session = pi:session({ id = "archiver", config = { model = DEFAULT_MODEL } })
+local archiver: Session = pi:session({ id = "archiver" })
+archiver:setConfig("model", DEFAULT_MODEL)
 archiver:prompt(`Please sync and archive the change {CHANGE_NAME}`)

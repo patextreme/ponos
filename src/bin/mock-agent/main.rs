@@ -14,6 +14,15 @@
 //!   emits a `usage_update` during the turn and carries
 //!   token usage on the prompt response
 //! - `MOCK_TOOL`        — emit a `tool_call` update (pending → completed)
+//! - `MOCK_TOOL_KIND`   — `ToolKind` of the emitted tool calls (default
+//!   `other`; e.g. `execute`, `read`, `edit`)
+//! - `MOCK_TOOL_TITLE`  — title of the emitted tool calls (defaults:
+//!   `mock_tool` for `MOCK_TOOL`, `Search files "foo"` for
+//!   `MOCK_TOOL_FLOW`; e.g. `bash` for pi-acp-style dedup fixtures)
+//! - `MOCK_TOOL_LOCATIONS` — comma-separated `path[:line]` absolute
+//!   locations attached to the emitted tool calls (peek paths)
+//! - `MOCK_TOOL_RAW_INPUT` — JSON value attached as the emitted tool
+//!   calls' `rawInput` (peek commands and fallback JSON)
 //! - `MOCK_TOOL_FLOW`   — comma-separated status sequence replayed for one
 //!   tool call: a titled `tool_call` for the first entry,
 //!   `tool_call_update`s for the rest (e.g.
@@ -78,6 +87,12 @@
 //! - `MOCK_CONFIG_ECHO`   — config id: each turn's reply echoes that
 //!   option's current in-memory value (end-to-end proof that prompts run
 //!   under a changed config)
+//! - `MOCK_CONFIG_DEPENDENT` — any non-empty value: a
+//!   `session/set_config_option` for `model` re-derives `effort` to its
+//!   seeded default in the response state, modeling agents with
+//!   dependent options (opencode-style model → effort reset); pins the
+//!   setConfig sequencing contract: driving option first, dependent
+//!   option last
 //!
 //! The mock is also an MCP client (rmcp): stdio servers suggested in
 //! `session/new { mcpServers }` are spawned, handshaked, and torn down
@@ -97,8 +112,8 @@ use agent_client_protocol::schema::v1::{
     PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionRequest,
     SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue,
     SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields, Usage, UsageUpdate,
+    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallLocation,
+    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
 use agent_client_protocol::{Agent, ConnectionTo, Stdio};
 use rmcp::ServiceExt;
@@ -176,10 +191,14 @@ impl McpState {
 
 /// Live per-session config-option state (`MOCK_CONFIG_OPTIONS` seed,
 /// mutated by `session/set_config_option` and `MOCK_CONFIG_UPDATE`, read
-/// by `MOCK_CONFIG_ECHO`).
+/// by `MOCK_CONFIG_ECHO`; `MOCK_CONFIG_DEPENDENT` resets dependent
+/// options back into `defaults`).
 #[derive(Default)]
 struct ConfigState {
     options: std::sync::Mutex<Vec<SessionConfigOption>>,
+    /// Seed snapshot (`MOCK_CONFIG_OPTIONS`): the values
+    /// `MOCK_CONFIG_DEPENDENT` re-derives dependent options to.
+    defaults: std::sync::Mutex<Vec<SessionConfigOption>>,
     /// Prompt counter (`MOCK_CONFIG_UPDATE` pushes once, on the first).
     prompts: AtomicU64,
 }
@@ -249,6 +268,75 @@ fn stop_reason_from_env() -> StopReason {
         Ok("cancelled") => StopReason::Cancelled,
         _ => StopReason::EndTurn,
     }
+}
+
+/// `MOCK_TOOL_KIND` as a `ToolKind` (default `other`; unknown values
+/// panic so test typos fail loudly).
+fn tool_kind_from_env() -> ToolKind {
+    match std::env::var("MOCK_TOOL_KIND").as_deref() {
+        Ok("read") => ToolKind::Read,
+        Ok("edit") => ToolKind::Edit,
+        Ok("delete") => ToolKind::Delete,
+        Ok("move") => ToolKind::Move,
+        Ok("search") => ToolKind::Search,
+        Ok("execute") => ToolKind::Execute,
+        Ok("think") => ToolKind::Think,
+        Ok("fetch") => ToolKind::Fetch,
+        Ok("switch_mode") => ToolKind::SwitchMode,
+        Ok("other") | Err(_) => ToolKind::Other,
+        Ok(other) => panic!("mock-agent: unknown MOCK_TOOL_KIND {other:?}"),
+    }
+}
+
+/// `MOCK_TOOL_LOCATIONS` as locations: comma-separated `path[:line]`
+/// entries (`/abs/path.rs:12`); a `:line` suffix is optional.
+fn tool_locations_from_env() -> Vec<ToolCallLocation> {
+    let raw = match std::env::var("MOCK_TOOL_LOCATIONS") {
+        Ok(r) if !r.is_empty() => r,
+        _ => return Vec::new(),
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|entry| match entry.rsplit_once(':') {
+            Some((path, line)) if !line.is_empty() && line.bytes().all(|b| b.is_ascii_digit()) => {
+                ToolCallLocation::new(path).line(
+                    line.parse::<u32>()
+                        .expect("MOCK_TOOL_LOCATIONS line number"),
+                )
+            }
+            _ => ToolCallLocation::new(entry),
+        })
+        .collect()
+}
+
+/// `MOCK_TOOL_RAW_INPUT` as a JSON value.
+fn tool_raw_input_from_env() -> Option<serde_json::Value> {
+    std::env::var("MOCK_TOOL_RAW_INPUT")
+        .ok()
+        .filter(|r| !r.is_empty())
+        .map(|raw| serde_json::from_str(&raw).expect("MOCK_TOOL_RAW_INPUT must be JSON"))
+}
+
+/// A `ToolCall` announcement for `MOCK_TOOL`/`MOCK_TOOL_FLOW`, carrying
+/// the `MOCK_TOOL_KIND` / `MOCK_TOOL_LOCATIONS` / `MOCK_TOOL_RAW_INPUT`
+/// knobs so ponos's peek synthesis is drivable end to end.
+fn mock_tool_call(id: &str, default_title: &str, status: ToolCallStatus) -> ToolCall {
+    let title = std::env::var("MOCK_TOOL_TITLE")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| default_title.to_string());
+    let mut call = ToolCall::new(id.to_string(), title)
+        .kind(tool_kind_from_env())
+        .status(status);
+    let locations = tool_locations_from_env();
+    if !locations.is_empty() {
+        call = call.locations(locations);
+    }
+    if let Some(raw) = tool_raw_input_from_env() {
+        call = call.raw_input(raw);
+    }
+    call
 }
 
 fn prompt_text(req: &PromptRequest) -> String {
@@ -387,6 +475,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let options: Vec<SessionConfigOption> = serde_json::from_str(&raw)
                             .expect("MOCK_CONFIG_OPTIONS must be a JSON array of config options");
                         *config.options.lock().unwrap() = options.clone();
+                        *config.defaults.lock().unwrap() = options.clone();
                         response = response.config_options(options);
                     }
                     responder.respond(response)
@@ -447,6 +536,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     SessionConfigOptionValue::Boolean { value },
                                 ) => b.current_value = *value,
                                 _ => {}
+                            }
+                        }
+                    }
+                    // MOCK_CONFIG_DEPENDENT: model agents whose option sets
+                    // have internal dependencies — a `model` set re-derives
+                    // `effort` to its seeded default, so only a later
+                    // `effort` set (driving-option-first sequencing) sticks.
+                    if std::env::var("MOCK_CONFIG_DEPENDENT").is_ok_and(|v| !v.is_empty())
+                        && req.config_id.0.as_ref() == "model"
+                    {
+                        let default = config
+                            .defaults
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .find(|o| o.id.0.as_ref() == "effort")
+                            .map(|o| o.kind.clone());
+                        if let Some(kind) = default {
+                            for opt in options.iter_mut() {
+                                if opt.id.0.as_ref() == "effort" {
+                                    opt.kind = kind.clone();
+                                }
                             }
                         }
                     }
@@ -670,9 +781,11 @@ async fn run_prompt(
     if env_flag("MOCK_TOOL") {
         cx.send_notification(SessionNotification::new(
             session_id.clone(),
-            SessionUpdate::ToolCall(
-                ToolCall::new("tool-1", "mock_tool").status(ToolCallStatus::Pending),
-            ),
+            SessionUpdate::ToolCall(mock_tool_call(
+                "tool-1",
+                "mock_tool",
+                ToolCallStatus::Pending,
+            )),
         ))?;
         tokio::time::sleep(delay).await;
         if turn.cancelled.load(Ordering::SeqCst) {
@@ -709,7 +822,7 @@ async fn run_prompt(
             };
             let status = tool_status_from_str(status);
             let update = if i == 0 && !bare {
-                SessionUpdate::ToolCall(ToolCall::new(FLOW_ID, FLOW_TITLE).status(status))
+                SessionUpdate::ToolCall(mock_tool_call(FLOW_ID, FLOW_TITLE, status))
             } else {
                 SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                     FLOW_ID,

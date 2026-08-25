@@ -39,9 +39,9 @@ local function predicateAgent(predicate: string, payload: string, options: Predi
 	for attempt = 1, MAX_ATTEMPTS do
 		local session: Session = oc:session({
 			id = options.sessionId,
-			config = { model = options.model },
 			resultSchema = { type = "boolean" },
 		})
+		session:setConfig("model", options.model)
 		local promptResult = session:prompt(buildPrompt(predicate, payload))
 		local verdict = promptResult.result :: boolean?
 		if verdict ~= nil then

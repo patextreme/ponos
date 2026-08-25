@@ -1,6 +1,6 @@
 //! Type-definition sync guard: the probe fixture
 //! (`tests/fixtures/types_probe.luau`, `--!strict`) exercises every member,
-//! method, and field `types/ponos.d.luau` promises, against the mock agent.
+//! method, and field `.ponos/ponos.d.luau` promises, against the mock agent.
 //! If the runtime drops or renames anything the definitions document, this
 //! test fails. (Static analysis of the fixture lives in the nix
 //! `ponos-analyze` check; `ponos types` output sync lives in cli.rs.)

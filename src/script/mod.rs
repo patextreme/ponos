@@ -339,40 +339,21 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                     })?;
                 }
 
-                // Per-session config applied at creation (session-config-options
-                // capability): keys are config-option ids, values are select
-                // choice ids (strings) or booleans. Typed before the session
-                // spawns — the same pre-send rule as setConfig, extended to
-                // the spawn boundary — so an invalid entry never costs a
-                // subprocess.
-                let mut constructor_config: Vec<(String, SessionConfigOptionValue)> = Vec::new();
-                if let Some(cfg) = opts.get::<Option<Table>>("config")? {
-                    for pair in cfg.pairs::<Value, Value>() {
-                        let (key, value) = pair?;
-                        let id = match key {
-                            Value::String(s) => s.to_str()?.to_string(),
-                            other => {
-                                return Err(mlua::Error::runtime(format!(
-                                    "config keys must be strings (config-option ids), got {}",
-                                    other.type_name()
-                                )));
-                            }
-                        };
-                        let wire_value = match value {
-                            Value::String(s) => {
-                                SessionConfigOptionValue::value_id(s.to_str()?.to_string())
-                            }
-                            Value::Boolean(b) => SessionConfigOptionValue::boolean(b),
-                            other => {
-                                return Err(mlua::Error::runtime(format!(
-                                    "config.{id} must be a string (select value id) or boolean, \
-                                 got {}",
-                                    other.type_name()
-                                )));
-                            }
-                        };
-                        constructor_config.push((id, wire_value));
-                    }
+                // The `config` session option is removed (it was a table
+                // applied with unspecified `pairs()` order, which cannot
+                // coexist with agents that re-derive dependent options).
+                // The key itself is the removed API: reject it pre-spawn —
+                // populated or empty — instead of silently ignoring old
+                // scripts; the author migrates to sequential setConfig
+                // calls in dependency order (driving options first).
+                if opts.get::<Option<Table>>("config")?.is_some() {
+                    return Err(mlua::Error::runtime(
+                        "config session option was removed: a config table cannot express \
+                         application order, which matters for agents with dependent options \
+                         (e.g. opencode resets `effort` when `model` is set). Apply config \
+                         with session:setConfig(...) after session creation — set driving \
+                         options (like `model`) first",
+                    ));
                 }
 
                 // Typed result contract: eager compilation so schema errors
@@ -407,27 +388,6 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                 .await
                 .map_err(|e| mlua::Error::runtime(e.to_string()))?;
                 state.sessions.borrow_mut().push(handle.clone());
-
-                // Apply constructor config entries through the same path as
-                // setConfig (one session/set_config_option each, in table
-                // iteration order — order across entries is unspecified). On
-                // rejection the session is torn down before the error
-                // surfaces, so no subprocess or registry entry survives a
-                // failed constructor.
-                for (id, value) in constructor_config {
-                    if let Err(e) = handle.set_config(id, value).await {
-                        handle.close();
-                        handle.join().await;
-                        // Same identity rule as close(): pid, not label,
-                        // so a same-label sibling stays registered for
-                        // the run-end sweep.
-                        state
-                            .sessions
-                            .borrow_mut()
-                            .retain(|s| s.pid != handle.pid);
-                        return Err(mlua::Error::runtime(e));
-                    }
-                }
 
                 new_session_obj(&lua, handle)
             }
