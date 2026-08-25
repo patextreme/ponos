@@ -90,7 +90,7 @@
         runHook preCheck
         luau-lsp analyze --platform=standard \
           --definitions=.ponos/ponos.d.luau \
-          examples/*.luau crates/ponos-cli/tests/fixtures/*.luau
+          examples/*.luau examples/*/*.luau crates/ponos-cli/tests/fixtures/*.luau
         runHook postCheck
       '';
 

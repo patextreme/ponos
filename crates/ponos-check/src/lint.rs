@@ -1,8 +1,7 @@
 //! The full-moon lint walk: parse the entry and every file reachable
 //! through literal `require("...")` string arguments — never executing
 //! anything — collecting literal `ponos.agent("...")` call sites, broken
-//! or escaping requires, parse failures, and leading `--!strict`
-//! directives.
+//! requires, parse failures, and leading `--!strict` directives.
 //!
 //! Matching policy (settled in the change design): only *literal* call
 //! shapes are linted — `require("<string>")` / `require "<string>"` where
@@ -57,8 +56,8 @@ pub(crate) struct WalkResult {
     /// Successfully parsed files: the entry first, then required files in
     /// discovery order (each file once, even under require cycles).
     pub parsed: Vec<ParsedFile>,
-    /// Broken literal requires: non-relative strings, script-tree escapes,
-    /// and targets with no module file.
+    /// Broken literal requires: non-relative strings and targets with
+    /// no module file.
     pub broken: Vec<Finding>,
     /// Files that could not be read or parsed (`path:line:col: message`).
     pub failures: Vec<Finding>,
@@ -81,11 +80,6 @@ fn normalize(path: &Path) -> PathBuf {
         }
     }
     out
-}
-
-/// True when `path` does not stay inside `root` (the script tree guard).
-fn escapes(root: &Path, path: &Path) -> bool {
-    !path.starts_with(root)
 }
 
 /// A literal require string is navigable only when explicitly relative.
@@ -121,10 +115,6 @@ fn resolve_candidates(from_dir: &Path, module: &str) -> Option<PathBuf> {
 /// resolving every literal require edge with the same pure rules the
 /// runtime navigator uses.
 pub(crate) fn walk(entry: &Path) -> WalkResult {
-    let root = entry
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
     let mut result = WalkResult::default();
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut queue: VecDeque<PathBuf> = VecDeque::from([entry.to_path_buf()]);
@@ -173,7 +163,7 @@ pub(crate) fn walk(entry: &Path) -> WalkResult {
         collector.visit_ast(&ast);
 
         for req in &collector.requires {
-            match resolve_edge(&root, &path, &req.module) {
+            match resolve_edge(&path, &req.module) {
                 Ok(target) => queue.push_back(target),
                 Err(message) => result.broken.push(Finding {
                     path: path.clone(),
@@ -196,7 +186,7 @@ pub(crate) fn walk(entry: &Path) -> WalkResult {
 
 /// Resolve one literal require edge exactly as the runtime would: the
 /// physical module file, or a finding message naming the problem.
-fn resolve_edge(root: &Path, from_file: &Path, module: &str) -> Result<PathBuf, String> {
+fn resolve_edge(from_file: &Path, module: &str) -> Result<PathBuf, String> {
     let from_dir = from_file.parent().unwrap_or(Path::new("."));
     if !is_relative_module(module) {
         return Err(format!(
@@ -205,12 +195,6 @@ fn resolve_edge(root: &Path, from_file: &Path, module: &str) -> Result<PathBuf, 
         ));
     }
     let target = normalize(&from_dir.join(module));
-    if escapes(root, &target) {
-        return Err(format!(
-            "require path escapes the script directory: {}",
-            target.display()
-        ));
-    }
     resolve_candidates(from_dir, module).ok_or_else(|| {
         format!(
             "cannot resolve require `{module}`: no module file at {}",
@@ -463,12 +447,11 @@ mod tests {
             "main.luau",
             "--!strict\n\
              local a = require(\"./lib/missing\")\n\
-             local b = require(\"../../outside\")\n\
              local c = require(\"@alias/thing\")\n\
-             return a, b, c\n",
+             return a, c\n",
         );
         let walk_result = walk(&entry);
-        assert_eq!(walk_result.broken.len(), 3, "{:?}", walk_result.broken);
+        assert_eq!(walk_result.broken.len(), 2, "{:?}", walk_result.broken);
         // All findings point at the requiring file with the call's line.
         assert!(
             walk_result
@@ -484,13 +467,34 @@ mod tests {
         assert!(
             walk_result.broken[1]
                 .message
-                .contains("escapes the script directory")
-        );
-        assert!(
-            walk_result.broken[2]
-                .message
                 .contains("not relative to the script")
         );
+    }
+
+    #[test]
+    fn cross_tree_require_is_not_a_finding() {
+        // A require target outside the entry's directory is walked and
+        // linted like any other module: no escape finding exists.
+        let base = std::env::temp_dir().join(format!("ponos-lint-cross-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("workflow")).unwrap();
+        fs::create_dir_all(base.join("shared")).unwrap();
+        fs::write(
+            base.join("workflow/main.luau"),
+            "--!strict\nlocal h = require(\"../shared/helper\")\nreturn h\n",
+        )
+        .unwrap();
+        fs::write(base.join("shared/helper.luau"), "--!strict\nreturn {}\n").unwrap();
+        let walk_result = walk(&base.join("workflow/main.luau"));
+        assert!(walk_result.broken.is_empty(), "{:?}", walk_result.broken);
+        assert!(
+            walk_result.failures.is_empty(),
+            "{:?}",
+            walk_result.failures
+        );
+        assert_eq!(walk_result.parsed.len(), 2, "{:?}", walk_result.parsed);
+        assert!(walk_result.parsed.iter().all(|f| f.strict));
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -508,7 +512,7 @@ mod tests {
 
     #[test]
     fn escaped_string_literals_are_not_interpreted() {
-        let dir = tmp_project("escapes");
+        let dir = tmp_project("backslash");
         // A backslash in the literal means the runtime value differs from
         // the source text: skip, no false findings.
         let entry = write(

@@ -131,13 +131,20 @@ fn require_sibling_missing_and_cached() {
         "missing-module error must name the path: {err}"
     );
 
-    // escaping path rejected with a Lua error
-    let err = lua
-        .load("require('../outside')")
+    // cross-tree require: a module outside the entry directory loads
+    let shared_name = format!("{}-shared", dir.file_name().unwrap().to_str().unwrap());
+    let shared = dir.parent().unwrap().join(&shared_name);
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("helper.luau"), "return { n = 7 }").unwrap();
+    let v: u32 = lua
+        .load(format!(
+            "local m = require('../{shared_name}/helper') return m.n"
+        ))
         .set_name(entry.clone())
-        .eval::<()>()
-        .unwrap_err();
-    assert!(err.to_string().contains("escapes"), "{err}");
+        .eval()
+        .unwrap();
+    assert_eq!(v, 7);
+    let _ = std::fs::remove_dir_all(&shared);
 
     // absolute path rejected
     let err = lua

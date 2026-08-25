@@ -62,9 +62,13 @@ orchestration logic belongs in the script; anything touching the machine
 belongs in the *agent's* prompt or the agent registry.
 
 `require` resolves `.luau` modules relative to the requiring file
-(`foo.luau`, `foo.lua`, `foo/init.luau`, `foo/init.lua`) and rejects
-paths escaping the script tree. `--!strict` is enforced by `ponos check`
-on the entry and every reachable file.
+(`foo.luau`, `foo.lua`, `foo/init.luau`, `foo/init.lua`) with no directory
+boundary — `require("../shared/helper")` reaches sibling trees — and
+rejects non-relative require strings (absolute paths, bare module names,
+aliases). Scripts are trusted code: they drive agents with the user's full
+authority, and the sandbox limits the blast radius of bugs, not malice.
+`--!strict` is enforced by `ponos check` on the entry and every reachable
+file.
 
 ## API reference
 

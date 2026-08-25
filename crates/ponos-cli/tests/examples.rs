@@ -72,6 +72,18 @@ fn example_typed_results() {
 }
 
 #[test]
+fn example_workflow_1_shared_helper() {
+    // Cross-tree require: the entry requires ../shared/helper from a
+    // sibling directory of its own tree.
+    run_example("workflow-1/main.luau", &[]);
+}
+
+#[test]
+fn example_workflow_2_shared_helper() {
+    run_example("workflow-2/main.luau", &[]);
+}
+
+#[test]
 fn example_model_fanout() {
     // The mock advertises a `model` select option and echoes its current
     // value in each reply, so the two sessions provably run under the two

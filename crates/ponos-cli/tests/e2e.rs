@@ -78,6 +78,47 @@ s:close()
 }
 
 #[test]
+fn cross_tree_require_runs() {
+    // Entry and helper live in sibling trees; the run must succeed with
+    // `require("../shared/helper")` walking out of the entry directory.
+    let base = std::env::temp_dir().join(format!(
+        "ponos-e2e-{}-cross-require",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("workflow")).unwrap();
+    std::fs::create_dir_all(base.join("shared")).unwrap();
+    std::fs::write(
+        base.join("shared/helper.luau"),
+        r#"return {
+    drive = function(agent)
+        local s = agent:session({ id = "reviewer" })
+        local r = s:prompt("ignored")
+        s:close()
+        return r.text
+    end,
+}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("workflow/main.luau"),
+        &format!(
+            r#"
+local helper = require("../shared/helper")
+local agent = ponos.agent({{ command = "{mock}", env = {{ MOCK_CHUNKS = "Hel|lo" }} }})
+local text = helper.drive(agent)
+assert(text == "Hello", "got " .. tostring(text))
+"#,
+            mock = mock_agent()
+        ),
+    )
+    .unwrap();
+    let out = run(&base.join("workflow/main.luau"), &base);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn default_session_labels() {
     let dir = tmpdir("labels");
     let script = write_script(

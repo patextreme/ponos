@@ -1,9 +1,11 @@
 //! Relative module resolution for ponos scripts.
 //!
-//! Implements mlua's `Require` trait over the entry script's directory.
-//! `require("./lib/util")` resolves `.luau`/`.lua`/`init.luau` files relative
-//! to the requiring file; paths escaping the script tree and absolute paths
-//! are rejected with a Lua error. Caching (same path → same module table) is
+//! Implements mlua's `Require` trait relative to the entry script's
+//! directory. `require("./lib/util")` resolves `.luau`/`.lua`/`init.luau`
+//! files relative to the requiring file, with no boundary: relative paths
+//! may walk out of the entry script's directory to anywhere on disk.
+//! Non-relative require strings (absolute paths, bare names, aliases) are
+//! rejected with a Lua error. Caching (same path → same module table) is
 //! provided by mlua's loader cache keyed on the resolved path.
 
 use std::path::{Component, Path, PathBuf};
@@ -29,11 +31,6 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
-/// True when `path` does not stay inside `root` (the script tree guard).
-fn escapes(root: &Path, path: &Path) -> bool {
-    !path.starts_with(root)
-}
-
 /// Resolve an already-joined module path to a physical file:
 /// `<p>.luau`, `<p>.lua`, `<p>/init.luau`, `<p>/init.lua`.
 fn resolve_file(path: &Path) -> Option<PathBuf> {
@@ -55,7 +52,8 @@ fn resolve_file(path: &Path) -> Option<PathBuf> {
 /// A requirer rooted at the entry script's directory.
 #[derive(Debug, Clone)]
 pub struct ScriptRequirer {
-    /// Absolute directory of the entry script; requires must stay inside.
+    /// Absolute directory of the entry script; relative chunk names are
+    /// joined onto it.
     root: PathBuf,
     /// Absolute path (file or dir) the navigation currently points at.
     current: PathBuf,
@@ -66,17 +64,6 @@ impl ScriptRequirer {
         Self {
             current: root.clone(),
             root,
-        }
-    }
-
-    fn guard(&self, path: &Path) -> StdResult<(), NavigateError> {
-        if !escapes(&self.root, path) {
-            Ok(())
-        } else {
-            Err(NavigateError::Other(mlua::Error::runtime(format!(
-                "require path escapes the script directory: {}",
-                path.display()
-            ))))
         }
     }
 }
@@ -98,7 +85,6 @@ impl Require for ScriptRequirer {
         } else {
             self.root.join(path)
         };
-        self.guard(&path)?;
         self.current = path;
         Ok(())
     }
@@ -117,14 +103,12 @@ impl Require for ScriptRequirer {
             return Err(NavigateError::NotFound);
         }
         let path = normalize(&path);
-        self.guard(&path)?;
         self.current = path;
         Ok(())
     }
 
     fn to_child(&mut self, name: &str) -> StdResult<(), NavigateError> {
         let path = normalize(&self.current.join(name));
-        self.guard(&path)?;
         // A child that is neither a module nor a directory cannot be part of
         // any deeper resolution: fail with an error naming the path (per the
         // scripting spec) instead of a generic not-found.
@@ -222,13 +206,27 @@ mod tests {
     }
 
     #[test]
-    fn escaping_paths_rejected() {
-        let dir = tmp();
-        let mut req = ScriptRequirer::new(dir.clone());
-        req.reset(&format!("@{}/main.luau", dir.display())).unwrap();
-        req.to_parent().unwrap(); // -> root itself is allowed
-        let err = req.to_parent().unwrap_err(); // -> escapes the script root
-        assert!(matches!(err, NavigateError::Other(_)), "{err:?}");
+    fn navigates_out_of_the_script_directory() {
+        // Two sibling trees under one parent: workflow/main.luau requires
+        // ../shared/helper, which walks out of the script root.
+        let base = std::env::temp_dir().join(format!("ponos-req-cross-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("workflow")).unwrap();
+        std::fs::create_dir_all(base.join("shared")).unwrap();
+        std::fs::write(base.join("workflow/main.luau"), "return 1").unwrap();
+        std::fs::write(base.join("shared/helper.luau"), "return 2").unwrap();
+
+        let mut req = ScriptRequirer::new(base.join("workflow"));
+        req.reset(&format!("@{}/workflow/main.luau", base.display()))
+            .unwrap();
+        // require("../shared/helper") from workflow/main.luau
+        req.to_parent().unwrap(); // main.luau -> workflow/
+        req.to_parent().unwrap(); // workflow/ -> base/ (outside the root)
+        req.to_child("shared").unwrap();
+        req.to_child("helper").unwrap();
+        assert!(req.has_module());
+        assert!(req.cache_key().ends_with("shared/helper.luau"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -243,11 +241,12 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn pure_helpers_normalize_and_escape() {
-        let root = Path::new("/script/tree");
-        assert!(!escapes(root, &normalize(&root.join("./lib/../lib/x"))));
-        assert!(escapes(root, &normalize(&root.join("../../outside"))));
-        // `..` at the root pops; anything landing outside the root escapes.
-        assert!(escapes(root, &normalize(&root.join(".."))));
+    fn pure_helpers_normalize() {
+        assert_eq!(
+            normalize(Path::new("/base/dir/./lib/../lib/x")),
+            Path::new("/base/dir/lib/x")
+        );
+        // `..` at the root pops.
+        assert_eq!(normalize(Path::new("/..")), Path::new("/"));
     }
 }

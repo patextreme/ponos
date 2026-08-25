@@ -256,14 +256,13 @@ fn computed_agent_name_is_not_linted() {
 }
 
 #[test]
-fn escaping_and_missing_requires_are_findings() {
+fn missing_require_is_a_finding() {
     let p = Project::new("require-edges");
     let script = p.write(
         "main.luau",
         "--!strict\n\
          local a = require(\"./lib/nope\")\n\
-         local b = require(\"../../outside\")\n\
-         return a, b\n",
+         return a\n",
     );
     let (code, _stdout, stderr) = p.check(&script, &happy_lsp(), &["--no-color"]);
     assert_eq!(code, 1, "{stderr}");
@@ -271,8 +270,21 @@ fn escaping_and_missing_requires_are_findings() {
         stderr.contains("cannot resolve require `./lib/nope`"),
         "{stderr}"
     );
-    assert!(stderr.contains("escapes the script directory"), "{stderr}");
-    assert!(stderr.contains("2 findings in 1 file"), "{stderr}");
+    assert!(stderr.contains("1 finding in 1 file"), "{stderr}");
+}
+
+#[test]
+fn cross_tree_require_is_not_a_finding() {
+    // `../shared/helper` walks out of the entry's directory and both the
+    // lint walk and the linter pass accept it.
+    let p = Project::new("require-cross");
+    p.write("shared/helper.luau", "--!strict\nreturn {}\n");
+    let script = p.write(
+        "workflow/main.luau",
+        "--!strict\nlocal h = require(\"../shared/helper\")\nreturn h\n",
+    );
+    let (code, _stdout, stderr) = p.check(&script, &happy_lsp(), &["--no-color"]);
+    assert_eq!(code, 0, "stderr:\n{stderr}");
 }
 
 #[test]

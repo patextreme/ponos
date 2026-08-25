@@ -22,7 +22,7 @@ The `ponos` CLI SHALL provide `ponos run <script.luau>`, where `<script.luau>` i
 - **THEN** the CLI prints an error naming the path and exits non-zero
 
 ### Requirement: Run pre-flight fails certain-broken scripts before spawning
-`ponos run` SHALL perform an in-process pre-flight before executing the script: compile/parse the entry and every file reachable through literal `require("...")` string arguments, resolve literal require targets under ponos's module-resolution rules (existence and script-tree escape guard), and resolve literal `ponos.agent("<name>")` string arguments against the discovered registry. A pre-flight failure SHALL fail the run before any agent subprocess spawns, with the finding(s) printed to standard error and exit code 1.
+`ponos run` SHALL perform an in-process pre-flight before executing the script: compile/parse the entry and every file reachable through literal `require("...")` string arguments, resolve literal require targets under ponos's module-resolution rules (existence; no boundary — requires may traverse out of the entry script's directory), and resolve literal `ponos.agent("<name>")` string arguments against the discovered registry. A pre-flight failure SHALL fail the run before any agent subprocess spawns, with the finding(s) printed to standard error and exit code 1.
 
 The pre-flight SHALL NOT execute script code, SHALL NOT enforce the `--!strict` directive, and SHALL NOT invoke `luau-lsp`. Non-literal (computed) require paths and agent names SHALL NOT be pre-flighted — a script using them runs exactly as before.
 
@@ -33,6 +33,10 @@ The pre-flight SHALL NOT execute script code, SHALL NOT enforce the `--!strict` 
 #### Scenario: Broken literal require fails fast
 - **WHEN** a script contains `require("./lib/missing")` and no such module file exists
 - **THEN** the run fails immediately with a finding naming the unresolved path, before any agent spawns
+
+#### Scenario: Cross-tree require passes pre-flight
+- **WHEN** a script contains `require("../shared/util")` and the module exists outside the entry script's directory
+- **THEN** the pre-flight resolves it without findings and the run proceeds
 
 #### Scenario: Non-strict scripts still run
 - **WHEN** a script without a `--!strict` directive is run
