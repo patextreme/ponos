@@ -13,6 +13,7 @@
 - [ ] 3.2 README: replace the constructor-`config` paragraphs with the removal note (error message, `setConfig` migration) and add the dependent-option sequencing paragraph (opencode `model` → `effort` reset as the concrete instance, configure-before-first-prompt pattern, atomicity note: a rejected `setConfig` no longer tears the session down inside the constructor). Verify by reading the config section end-to-end.
 - [ ] 3.3 Rewrite `examples/model-fanout.luau` to sequential `setConfig` calls (never a `pairs()` loop). Verify `ponos check examples/model-fanout.luau` passes and its `tests/examples.rs` entry runs green.
 - [ ] 3.4 Update `tests/fixtures/types_probe.luau` to drop `config` from the session-options use. Verify the definitions probe test passes.
+- [ ] 3.5 Update `skills/ponos/SKILL.md` (the in-repo copy consumers download): remove the `config` constructor option from the session-options table and the "pin at creation" example, remove the mixed-table luau-lsp workaround, teach sequential `setConfig` with the driving-option-first hint. Verify only `setConfig`/`configOptions` references remain (`rg -n 'config' skills/ponos/SKILL.md`).
 
 ## 4. Tests
 
@@ -24,4 +25,3 @@
 - [ ] 5.1 Full local suite: `cargo test` inside `nix develop` (all tests, offline). Verify zero failures.
 - [ ] 5.2 Sandbox parity: `nix build` succeeds (crane keeps `examples/` and `tests/fixtures/` in the build source).
 - [ ] 5.3 End-to-end sanity on a real agent: the `.work/repro-config.luau` script now errors pre-spawn with the migration message; the `setConfig`-ordered equivalent (`model` first, then `effort`) holds `effort = high` on opencode. Record both outputs.
-- [ ] 5.4 Out-of-repo follow-up (after archive): update `~/.pi/agent/skills/ponos/SKILL.md` — remove the `config` constructor option from the session table and the mixed-table luau-lsp workaround, teach sequential `setConfig` with the driving-option-first hint.

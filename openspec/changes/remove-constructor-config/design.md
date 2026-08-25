@@ -105,9 +105,11 @@ scripting shows the pattern.
    sequencing for a 0.1.0 CLI.
 2. Rollback = revert the commit; no persisted state or wire-format change is
    involved.
-3. Post-implementation follow-up (outside this change's edit roots): update
-   the `ponos` skill doc at `~/.pi/agent/skills/ponos/SKILL.md`, which
-   teaches `config` and the mixed-table workaround.
+3. `skills/ponos/SKILL.md` (the canonical in-repo copy consumers download)
+   is updated with the rest of the docs: drop the `config` constructor option
+   from the session-options table and the "pin at creation" example, remove
+   the mixed-table luau-lsp workaround, teach sequential `setConfig` with the
+   driving-option-first hint.
 
 ## Open Questions
 

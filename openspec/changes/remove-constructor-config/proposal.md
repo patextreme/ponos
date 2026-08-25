@@ -62,6 +62,8 @@ option removes a silent-config-drift failure class instead of papering over it.
 - Tests: `tests/e2e.rs` (constructor-config tests), `tests/examples.rs`
   (unchanged driver, updated example), `tests/fixtures/types_probe.luau`.
 - Docs: README config section; `examples/model-fanout.luau`.
-- Out of repo (follow-up, not part of this change): the `ponos` skill doc at
-  `~/.pi/agent/skills/ponos/SKILL.md` teaches `config` and the mixed-table
-  workaround — updated post-implementation.
+- Docs: README config section; `examples/model-fanout.luau`;
+  `skills/ponos/SKILL.md` (the in-repo canonical copy consumers
+  download — remove the `config` constructor option and the mixed-table
+  workaround, teach sequential `setConfig` with the driving-option-first
+  hint).

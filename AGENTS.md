@@ -59,6 +59,11 @@ the same pin. Don't update the pin casually.
   here may call a compiled chunk.
 - `src/task.rs` — `ponos.spawn`/`join`/`map` concurrency primitives.
 - `src/render/` — streaming output renderer (color/quiet/verbose modes).
+- `skills/` — canonical skill docs (`skills/ponos/SKILL.md`) that consumers
+  download and copy into their own agent setup; deployed copies
+  (e.g. `~/.pi/agent/skills/ponos`) are read-only symlinks into the nix
+  store. Skill-doc changes are in-repo edits inside the change's edit
+  roots, never out-of-repo follow-ups.
 
 ## Workflow: OpenSpec
 
