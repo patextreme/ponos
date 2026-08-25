@@ -4,11 +4,23 @@
 //! [`InteractionPolicy`]. The remaining ports (config source, agent
 //! transport) land here as the restructure proceeds.
 
+use std::path::Path;
+
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionId, PermissionOptionKind,
 };
 
+use crate::core::config::{ConfigError, Registry};
 use crate::core::events::SessionEvent;
+
+/// Where the agent registry comes from. The TOML/fs loader implements it
+/// today (user + project layers, project-wins precedence); the port is
+/// the seam for other sources (embedded, remote) without touching
+/// callers.
+pub trait ConfigSource: Send + Sync {
+    /// Discover and load the registry for an invocation directory.
+    fn discover(&self, invocation_dir: &Path) -> Result<Registry, ConfigError>;
+}
 
 /// Where session events go. The session driver folds wire updates and
 /// emits structured [`SessionEvent`]s through this port; the terminal

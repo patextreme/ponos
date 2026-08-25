@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::config::{AgentSpec, ConfigError, Registry};
+use crate::core::ports::ConfigSource;
 
 #[derive(Debug, Default, serde::Deserialize)]
 struct RegistryFile {
@@ -62,6 +63,16 @@ pub fn discover(invocation_dir: &Path) -> Result<Registry, ConfigError> {
     let user = user_config_path();
     let project = find_project_config(invocation_dir);
     load(user.as_deref(), project.as_deref())
+}
+
+/// Filesystem-backed [`ConfigSource`]: TOML discovery and loading of the
+/// user and project registry layers.
+pub struct FsConfigSource;
+
+impl ConfigSource for FsConfigSource {
+    fn discover(&self, invocation_dir: &Path) -> Result<Registry, ConfigError> {
+        discover(invocation_dir)
+    }
 }
 
 /// `$XDG_CONFIG_HOME/ponos/config.toml` or `$HOME/.config/ponos/config.toml`.
