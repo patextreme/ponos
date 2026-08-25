@@ -49,6 +49,7 @@ while iteration < MAX_ITERATIONS do
 	ponos.log("Fix result: " .. fixResult.text)
 
 	reviewer:prompt("Commit the changes and push them to the PR branch so the next review sees them.")
+	reviewer:prompt("Also comment on the PR with Claude's review")
 	iteration += 1
 end
 
