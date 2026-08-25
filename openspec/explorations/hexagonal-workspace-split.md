@@ -1,7 +1,10 @@
 # Exploration: Hexagonal restructure, change ② — physical workspace split
 
 **Date:** 2026-08-25
-**Status:** Planned — blocked on `hexagonal-internal-restructure` (change ①) landing
+**Status:** Captured — change `hexagonal-workspace-split`
+(see `openspec/changes/hexagonal-workspace-split/`). Corrections below
+were settled in the pre-proposal design session after ①'s deviations
+landed.
 **Trigger question:** "Structure the crate in a modular way that is easy to
 extend, for longevity" → settled as a three-change sequence; this is ②.
 
@@ -35,7 +38,25 @@ change; `tests/` stay byte-identical and green.
 | `ponos-check` | check/preflight pipeline; `TYPE_DEFINITIONS`; luau-lsp shell-out | core, mlua, full-moon |
 | `ponos-config` | TOML/fs discovery — the only `ConfigSource` impl (317 lines today; collapsible into core's `config::fs` if it bothers anyone) | core |
 | `ponos-render` | terminal line renderer consuming structured events | core |
-| `ponos-cli` | composition root: clap, wiring, both binaries, bridge + result UDS channel | everything |
+| `ponos-result` | `result_wire.rs` — UDS channel + submit/verdict protocol, both halves (added in the design session: filing it under `ponos-cli` creates an `acp → cli → acp` cycle; folding into `ponos-acp` misplaces the protocol; splitting it duplicates the wire types) | core, tokio, serde, serde_json |
+| `ponos-cli` | composition root: clap, wiring, both binaries, bridge + result UDS channel, transport composition line (moved here from `script/state.rs`; `RunConfig` gains injected transport — the only test-surface edit: the mechanical `transport:` line at the two `RunConfig` literals in `tests/script.rs`/`tests/e2e.rs`) | everything |
+
+Corrections to earlier drafts, verified against the landed ① tree:
+
+- `config_fs.rs` is 155 lines (not 317); "collapsible into core's
+  `config::fs`" is impossible — core is I/O-free by ①'s settled design.
+  Kept as its own crate for adapter symmetry (fold-into-cli recorded as
+  fallback in the change's design D1).
+- `ponos-core`'s dep column gains the data-level deps ① settled:
+  mlua (`task`), agent-client-protocol schema types (`turn`, `session`,
+  `ports`), tokio::sync.
+- The `ponos` lib name in `ponos-cli` is the **permanent facade**
+  (flat `pub use` of member crates + core compat re-exports) — tests
+  exercise the system through `ponos::*`; it is not a shim for ③ to
+  delete.
+- ①'s other two surviving arrows resolve as: `acp → result_wire` =
+  `acp → ponos-result` (legal), `bridge → result_wire` = `cli →
+  ponos-result` (legal). Only `script → acp` needed a design change.
 
 ## Work items when picked up
 
@@ -51,7 +72,7 @@ change; `tests/` stay byte-identical and green.
 
 ## Interactions to remember
 
-- Must land **after** ①; ideally after `richer-render-logging` rebases onto
-  ①'s structured events (that change builds on today's `DisplayEvent`).
+- Landed after ①; `richer-render-logging` interaction satisfied (it
+  landed before ① and rides its structured events).
 - Followed by change ③ (lint enforcement + docs) — see
   `hexagonal-polish.md`.

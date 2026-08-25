@@ -1,8 +1,8 @@
 # Exploration: Hexagonal restructure, change ③ — polish, enforcement, docs
 
 **Date:** 2026-08-25
-**Status:** Planned — blocked on the workspace split (change ②, see
-`hexagonal-workspace-split.md`) landing
+**Status:** Planned — blocked on the workspace split (change ②,
+`hexagonal-workspace-split`, now proposed) landing
 **Trigger question:** Final leg of the three-change hexagonal sequence
 agreed in the design session.
 
@@ -15,24 +15,29 @@ change.
 
 ## Work items when picked up
 
-1. **Dependency-direction enforcement.** Options to evaluate at pick-up time
-   (in rough preference order):
-   - crate-level: `unused_crate_dependencies` + `deny(missing_docs)` off
-     (private), plus the workspace split itself already makes the big arrows
+1. **Dependency-direction enforcement.** Floor pre-committed in the
+   pre-② design session: a small custom integration test that greps
+   `ponos-core` for forbidden imports (mlua beyond `task`'s data level,
+   tokio I/O, fs, adapter crates) + workspace `[workspace.lints]` with
+   `[lints] workspace = true` — zero deps, offline-safe, cannot fail to
+   land. Nice-to-haves to evaluate at pick-up time, demoted:
+   - crate-level: `unused_crate_dependencies` (if the pinned nightly
+     behaves); the split itself already makes the big arrows
      compiler-enforced;
-   - module-level (within `ponos-core`): `cargo modules` / `cargo-deps`
-     checks in CI if the toolchain supports it cleanly on the pinned nightly;
-   - a tiny custom test that greps `use crate::` in core and fails on
-     forbidden imports (mlua/tokio-I/O/fs) — cheap, zero deps, runs in the
-     offline sandbox.
+   - `cargo modules` / `cargo-deps` in CI if the toolchain supports it
+     cleanly in the offline nix sandbox.
 2. **Workspace lint policy** in root `Cargo.toml` (`[workspace.lints]`,
    shared `[lints] workspace = true`), aligned with what crane builds.
 3. **Docs**: update `AGENTS.md` architecture section (crate map, the four
    funded ports, the closed-set rule — new ports require their own change);
    `README.md` pointer refresh; note the TUI readiness rationale (structured
    events, interaction-policy port) where the event types live.
-4. **Straggler hygiene**: any leftover re-export shims from ①/② removal,
-   dead module-tree artifacts, `git grep` for stale paths.
+4. **Straggler hygiene**: any leftover path shims from ①/② moves, dead
+   module-tree artifacts, `git grep` for stale paths. **Carve-out:** the
+   `ponos` facade in `ponos-cli` (member-crate re-exports + core compat
+   re-exports of `config`/`task`) is load-bearing API the tests depend on —
+   it stays. Also fix stale doc paths (e.g. `src/config.rs` references in
+   AGENTS.md, owned by item 3).
 5. Acceptance: `cargo test`, `cargo clippy -- -D warnings`,
    `nix flake check` green; `git diff tests/ examples/` empty.
 
