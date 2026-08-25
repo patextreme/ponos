@@ -41,7 +41,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::core::config::AgentSpec;
 use crate::core::contract::ResultContract;
 use crate::core::events::{PlanEntry, PlanStatus, SessionEvent};
-use crate::core::ports::{EventSink, HeadlessPolicy, InteractionPolicy};
+use crate::core::ports::{BridgeConfig, EventSink, HeadlessPolicy, InteractionPolicy};
 use crate::core::turn::{PeekInputs, TurnFold, status_string, submission_sink};
 use crate::result_wire::{bind_result_socket, spawn_result_channel};
 
@@ -349,12 +349,13 @@ pub async fn start_session(
                             ),
                         },
                     );
+                    let bridge = BridgeConfig::ponos_bridge();
                     mcp_servers.push(McpServer::Stdio(
-                        McpServerStdio::new(crate::bridge::SERVER_NAME, exe)
+                        McpServerStdio::new(bridge.server_name, exe)
                             .args(vec!["__bridge".to_string()])
                             .env(vec![
-                                EnvVariable::new("PONOS_BRIDGE_ADDR", path.display().to_string()),
-                                EnvVariable::new("PONOS_RESULT_SCHEMA", contract.schema_json()),
+                                EnvVariable::new(bridge.addr_env, path.display().to_string()),
+                                EnvVariable::new(bridge.schema_env, contract.schema_json()),
                             ]),
                     ));
                     result_channel = Some(channel);

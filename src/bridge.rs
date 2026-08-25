@@ -31,6 +31,10 @@ use crate::result_wire;
 
 /// Name of the injected server (agents derive `mcp__ponos__result_submit`).
 pub const SERVER_NAME: &str = "ponos";
+/// Env var carrying the session's result socket path.
+pub const BRIDGE_ADDR_ENV: &str = "PONOS_BRIDGE_ADDR";
+/// Env var carrying the declared JSON schema.
+pub const RESULT_SCHEMA_ENV: &str = "PONOS_RESULT_SCHEMA";
 /// Name of the single tool the bridge exposes.
 pub const TOOL_NAME: &str = "result_submit";
 
@@ -178,10 +182,10 @@ pub fn run() -> std::process::ExitCode {
 }
 
 async fn run_async() -> Result<(), String> {
-    let socket = std::env::var_os("PONOS_BRIDGE_ADDR")
+    let socket = std::env::var_os(BRIDGE_ADDR_ENV)
         .map(std::path::PathBuf::from)
         .ok_or("PONOS_BRIDGE_ADDR is not set (this subcommand is spawned by agents)")?;
-    let schema_raw = std::env::var("PONOS_RESULT_SCHEMA")
+    let schema_raw = std::env::var(RESULT_SCHEMA_ENV)
         .map_err(|_| "PONOS_RESULT_SCHEMA is not set".to_string())?;
     let schema: serde_json::Value = serde_json::from_str(&schema_raw)
         .map_err(|e| format!("invalid PONOS_RESULT_SCHEMA: {e}"))?;
@@ -205,6 +209,16 @@ async fn run_async() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_wiring_matches_core_defaults() {
+        // The driver injects the server by core's BridgeConfig; the
+        // bridge subprocess reads env by its own consts. They must agree.
+        let cfg = crate::core::ports::BridgeConfig::ponos_bridge();
+        assert_eq!(cfg.server_name, SERVER_NAME);
+        assert_eq!(cfg.addr_env, BRIDGE_ADDR_ENV);
+        assert_eq!(cfg.schema_env, RESULT_SCHEMA_ENV);
+    }
 
     #[test]
     fn tool_description_carries_submit_guidance() {

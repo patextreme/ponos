@@ -13,6 +13,33 @@ use agent_client_protocol::schema::v1::{
 use crate::core::config::{ConfigError, Registry};
 use crate::core::events::SessionEvent;
 
+/// Wiring for the injected typed-results MCP server (the `ponos __bridge`
+/// subprocess suggested to agents in `session/new { mcpServers }`).
+///
+/// The value is data, not an import: the driver injects the server by
+/// these names, and the bridge binary reads the same env vars — a unit
+/// test in `src/bridge.rs` pins the two definitions together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BridgeConfig {
+    /// Server name agents see (they derive `mcp__<name>__result_submit`).
+    pub server_name: &'static str,
+    /// Env var carrying the session's result socket path.
+    pub addr_env: &'static str,
+    /// Env var carrying the declared JSON schema.
+    pub schema_env: &'static str,
+}
+
+impl BridgeConfig {
+    /// The ponos bridge binary's wiring.
+    pub const fn ponos_bridge() -> Self {
+        Self {
+            server_name: "ponos",
+            addr_env: "PONOS_BRIDGE_ADDR",
+            schema_env: "PONOS_RESULT_SCHEMA",
+        }
+    }
+}
+
 /// Where the agent registry comes from. The TOML/fs loader implements it
 /// today (user + project layers, project-wins precedence); the port is
 /// the seam for other sources (embedded, remote) without touching
