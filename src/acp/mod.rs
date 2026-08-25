@@ -29,7 +29,7 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     BooleanConfigOptionCapabilities, CancelNotification, ClientCapabilities,
     ClientSessionCapabilities, ContentBlock, ContentChunk, EnvVariable, InitializeRequest,
-    McpServer, McpServerStdio, NewSessionRequest, PermissionOption, PermissionOptionKind,
+    McpServer, McpServerStdio, NewSessionRequest,
     PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
     SessionConfigOption, SessionConfigOptionValue, SessionConfigOptionsCapabilities,
