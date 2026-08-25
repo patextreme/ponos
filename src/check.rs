@@ -12,6 +12,7 @@
 //! The same lint machinery backs the `run` pre-flight
 //! ([`preflight`]), narrowed to compile + require + agent checks.
 
+pub(crate) mod defs;
 pub(crate) mod lint;
 
 use std::collections::HashSet;
@@ -325,7 +326,7 @@ fn write_definitions_temp() -> std::io::Result<PathBuf> {
             .as_nanos()
     );
     let path = std::env::temp_dir().join(unique);
-    std::fs::write(&path, crate::cli::TYPE_DEFINITIONS)?;
+    std::fs::write(&path, defs::TYPE_DEFINITIONS)?;
     Ok(path)
 }
 

@@ -56,12 +56,6 @@ enum Command {
     Bridge,
 }
 
-/// Luau type definitions for the `ponos` script API. Single source of
-/// truth: `.ponos/ponos.d.luau`, embedded at compile time so the emitted
-/// definitions always match the installed binary. Also feeds `ponos
-/// check`'s luau-lsp pass.
-pub(crate) const TYPE_DEFINITIONS: &str = include_str!("../.ponos/ponos.d.luau");
-
 /// What `Cli::try_parse_from` produced: dispatch early on subcommands that
 /// need no runtime setup.
 #[derive(Debug)]
@@ -110,7 +104,7 @@ fn parse(args: &[String]) -> Result<Parsed, clap::Error> {
 /// script, registry, or agent configuration.
 fn print_types() -> ExitCode {
     println!("-- ponos {} type definitions", crate::VERSION);
-    print!("{TYPE_DEFINITIONS}");
+    print!("{}", crate::check::defs::TYPE_DEFINITIONS);
     ExitCode::SUCCESS
 }
 
