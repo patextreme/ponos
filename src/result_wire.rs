@@ -346,7 +346,19 @@ pub async fn connect(path: &std::path::Path) -> std::io::Result<UnixStream> {
 mod tests {
     use super::*;
     use crate::core::contract::ResultContract;
-    use crate::render::Renderer;
+    use crate::core::events::SessionEvent;
+
+    /// A recording sink: captures events so tests assert on them instead
+    /// of leaning on the terminal renderer.
+    #[derive(Default)]
+    struct RecordingSink(std::sync::Mutex<Vec<(String, SessionEvent)>>);
+
+    impl EventSink for RecordingSink {
+        fn emit(&self, label: &str, event: SessionEvent) {
+            self.0.lock().unwrap().push((label.to_string(), event));
+        }
+        fn script_log(&self, _message: &str) {}
+    }
 
     fn contract() -> ResultContract {
         ResultContract::compile(serde_json::json!({
@@ -370,8 +382,7 @@ mod tests {
         // production); clean up here so the temp dir is not littered.
         let _ = std::fs::remove_file(&p1);
         let _ = std::fs::remove_file(&p2);
-        let sink: Arc<dyn EventSink> =
-            Arc::new(Renderer::new(crate::render::RenderOptions::quiet()));
+        let sink: Arc<dyn EventSink> = Arc::new(RecordingSink::default());
         // Closing channels (the production cleanup path) unlinks paths.
         let (l3, p3) = bind_result_socket().await.expect("bind 3");
         let (cancel_tx, _cancel_rx) = watch::channel(false);
@@ -419,8 +430,8 @@ mod tests {
     async fn submit_verdict_round_trip_over_socket() {
         let (listener, path) = bind_result_socket().await.expect("bind");
         let (cancel_tx, _cancel_rx) = watch::channel(false);
-        let event_sink: Arc<dyn EventSink> =
-            Arc::new(Renderer::new(crate::render::RenderOptions::quiet()));
+        let event_sink = Arc::new(RecordingSink::default());
+        let events = event_sink.clone();
         let in_flight = Arc::new(std::sync::Mutex::new(Some(())));
         let sink: SubmissionSink = {
             let in_flight = in_flight.clone();
@@ -430,7 +441,7 @@ mod tests {
             listener,
             contract(),
             sink,
-            event_sink,
+            event_sink as Arc<dyn EventSink>,
             "t/s1".into(),
             cancel_tx,
         );
@@ -457,6 +468,35 @@ mod tests {
             .await
             .expect("round trip");
         assert!(verdict.is_ok());
+
+        // The verdicts were emitted through the sink: accepted, rejected,
+        // and late (dropped) in order.
+        let recorded = events.0.lock().unwrap().clone();
+        assert_eq!(recorded.len(), 3, "{recorded:?}");
+        assert!(matches!(
+            &recorded[0],
+            (label, SessionEvent::ResultVerdict { accepted: true, late: false }) if label == "t/s1"
+        ));
+        assert!(matches!(
+            &recorded[1],
+            (
+                _,
+                SessionEvent::ResultVerdict {
+                    accepted: false,
+                    late: false
+                }
+            )
+        ));
+        assert!(matches!(
+            &recorded[2],
+            (
+                _,
+                SessionEvent::ResultVerdict {
+                    accepted: true,
+                    late: true
+                }
+            )
+        ));
 
         channel.close().await;
         assert!(!path.exists());
