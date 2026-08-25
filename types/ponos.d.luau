@@ -63,19 +63,14 @@ export type McpServer = McpServerStdio | McpServerHttp
 -- is a JSON Schema expressed as a plain Luau table: when set, the session
 -- gets a typed-result contract — prompts carry a submit-tool instruction
 -- and the outcome's `result` field carries the accepted submission.
--- `config` maps config-option ids to select choice ids (strings) or
--- boolean values, applied when the session is created (one `setConfig`
--- per entry; agent responses are authoritative). Declared as a union of
--- index signatures rather than `{ [string]: string | boolean }` because
--- table literals never unify with union-valued index signatures
--- (definitions-file types check invariantly) — the cost is that mixed
--- string/boolean tables are flagged; split entries or annotate.
+-- (Session config is applied with `setConfig` calls after `session()`
+-- returns — there is no `config` field; a `config` key is rejected at
+-- runtime before any agent subprocess spawns.)
 export type SessionOptions = {
 	id: string?,
 	cwd: string?,
 	mcpServers: { McpServer }?,
 	resultSchema: { [string]: any }?,
-	config: ({ [string]: string } | { [string]: boolean })?,
 }
 
 -- Options for `session:prompt(text, …)`.

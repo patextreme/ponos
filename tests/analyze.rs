@@ -104,21 +104,25 @@ fn real_luau_lsp_definitions_contract() {
     };
     let lsp_dir = lsp.parent().expect("luau-lsp path has a parent");
 
-    // type-definitions "Constructor config type-checks" (rejecting
-    // side): a non-string-or-boolean config entry value reports a type
-    // error naming the option-table type.
-    let p = Project::new("bad-config");
+    // type-definitions "Constructor config type-checks": the
+    // `SessionOptions` type declares no `config` field, and analysis
+    // does NOT flag the excess key (a known table-literal analyzer
+    // residual) — running the script instead raises the pre-spawn
+    // rejection (pinned in tests/e2e.rs). The residual stays documented
+    // so nobody rediscovers the missing static signal as a bug.
+    let p = Project::new("excess-config-key");
     let script = p.write(
         "--!strict\n\
          local agent = ponos.agent(\"mock\")\n\
-         local s = agent:session({ config = { model = 42 } })\n",
+         local s = agent:session({ config = { model = \"opus\" } })\n\
+         s:close()\n",
     );
     let (code, stdout, stderr) = p.check(&script, lsp_dir);
-    assert_eq!(code, 1, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stdout.is_empty(), "stdout: {stdout}");
     assert!(
-        stderr.contains("SessionOptions"),
-        "diagnostic must name the option-table type, stderr:\n{stderr}"
+        !stderr.contains("TypeError"),
+        "excess option keys are a known analyzer residual — no diagnostic expected, stderr:\n{stderr}"
     );
 
     // type-definitions "Wrong setConfig value type".
@@ -154,9 +158,8 @@ fn real_luau_lsp_definitions_contract() {
         "diagnostic must name the result table type, stderr:\n{stderr}"
     );
 
-    // Accepting sides of "Constructor config type-checks" and
-    // "Typed-result surface type-checks", plus "Outcome narrowing": one
-    // strict script using constructor `config` + `resultSchema` +
+    // Accepting sides of "Typed-result surface type-checks" and
+    // "Outcome narrowing": one strict script using `resultSchema` +
     // `r.result` and branching on a locally-bound parallel outcome
     // analyzes with zero type errors. (The local binding is
     // load-bearing: narrowing does not apply through repeated index
@@ -168,7 +171,6 @@ fn real_luau_lsp_definitions_contract() {
          local agent = ponos.agent(\"mock\")\n\
          local s = agent:session({\n\
          \tresultSchema = { type = \"object\" },\n\
-         \tconfig = { model = \"opus\" },\n\
          })\n\
          local r = s:prompt(\"hi\")\n\
          print(r.result)\n\

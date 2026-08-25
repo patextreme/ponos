@@ -7,7 +7,7 @@
 -- the definitions is removed or renamed in the runtime, this script fails.
 
 -- ponos.agent(name) → agent:session(SessionOptions: id, cwd,
--- mcpServers, resultSchema, config)
+-- mcpServers, resultSchema)
 local agent = ponos.agent("demo")
 local servers: { McpServer } = {
 	{
@@ -73,14 +73,16 @@ assert(rr.result.verdict == "approve", "result.verdict: " .. tostring(rr.result.
 assert(rr.stopReason == "end_turn", "result stopReason: " .. rr.stopReason)
 sr:close()
 
--- Per-session config (SessionOptions.config / Session.configOptions /
--- Session.setConfig): the mock advertises a select `model` option plus a
--- boolean `fast` option and echoes the current model in each reply
--- (MOCK_CONFIG_ECHO). The constructor `config` option pins the model at
--- creation; setConfig covers between-turn changes (both value kinds:
--- strings are select choice ids, booleans are boolean options).
+-- Per-session config (Session.configOptions / Session.setConfig): the
+-- mock advertises a select `model` option plus a boolean `fast` option
+-- and echoes the current model in each reply (MOCK_CONFIG_ECHO).
+-- Configure with setConfig calls immediately after session creation,
+-- before the first prompt (there is no constructor `config` option —
+-- a `config` key is rejected pre-spawn; both value kinds: strings are
+-- select choice ids, booleans are boolean options).
 local cfg_agent = ponos.agent("demo-config")
-local sc = cfg_agent:session({ config = { model = "haiku" } })
+local sc = cfg_agent:session()
+sc:setConfig("model", "haiku")
 local cfg = sc:configOptions()
 assert(#cfg == 2, "configOptions count: " .. tostring(#cfg))
 local model = cfg[1]

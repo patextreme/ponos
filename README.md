@@ -153,7 +153,7 @@ never hang.
 | API | Description |
 | --- | --- |
 | `ponos.agent(name_or_spec)` | Agent factory (registry name or inline `{command=, args=, env=}` spec) |
-| `agent:session({id=, cwd=, mcpServers=, resultSchema=, config=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `resultSchema` declares a typed-result contract (see below); `config` sets session config options at creation (see below) |
+| `agent:session({id=, cwd=, mcpServers=, resultSchema=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `resultSchema` declares a typed-result contract (see below); session config options are applied with `setConfig` after creation (see below) |
 | `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`result` is the turn's typed-result value, `nil` without one; `__tostring` → text; `text` is the turn's last agent message — see below); concurrent `prompt` calls on one session queue behind the in-flight turn |
 | `session:cancel()` | Cancels the in-flight turn (returns `stopReason = "cancelled"`) |
 | `session:close()` | Ends the session and reaps the agent process |
@@ -269,8 +269,10 @@ advertises, and keeps them live as the agent pushes changes:
 ```lua
 --!strict
 local claude = ponos.agent("claude")
-local opus = claude:session({ id = "reviewer", config = { model = "claude-opus-4-5" } })
-local haiku = claude:session({ id = "summarizer", config = { model = "claude-haiku-4-5" } })
+local opus = claude:session({ id = "reviewer" })
+opus:setConfig("model", "claude-opus-4-5") -- before the first prompt
+local haiku = claude:session({ id = "summarizer" })
+haiku:setConfig("model", "claude-haiku-4-5")
 
 for _, option in ipairs(opus:configOptions()) do
     ponos.log(("%s = %s"):format(option.id, tostring(option.currentValue)))
@@ -279,15 +281,26 @@ end
 haiku:setConfig("model", "claude-opus-4-5") -- between turns
 ```
 
-The `config` session option is sugar for pinning settings at creation:
-a Luau table mapping config-option ids to string (select choice id) or
-boolean values, applied after the agent session is created and before
-`session()` returns — one `setConfig` per entry, in unspecified order, with
-no local validation (the agent's response is authoritative). If the agent
-rejects any value, `session()` raises a catchable Lua error carrying the
-config id and the agent's message, and the spawned agent subprocess is
-torn down. Non-string/non-boolean values raise before any subprocess
-spawns. `setConfig` remains the between-turns path for later changes.
+There is no constructor `config` table, and passing one is an error: a
+Luau table cannot express application order (`pairs()` iteration order is
+unspecified), and order is load-bearing for agents with dependent
+options. A `config = { … }` key in the session-options table — populated
+or empty — raises a catchable Lua error **before any agent subprocess
+spawns**, with the migration spelled out in the message: apply config with
+`session:setConfig(...)` after session creation, setting driving options
+(like `model`) first.
+
+`setConfig` is therefore also the creation-time path: configure
+immediately after `session()` returns, before the first prompt. Order
+your calls when the agent has dependent options — opencode, for
+example, re-derives its `effort` option from the model on every `model`
+set, so set `model` first and `effort` last; each awaited `setConfig`
+sees the state the previous one returned, and the agent's response is
+authoritative after each. Note the atomicity trade-off: unlike a
+constructor-applied table, a rejected `setConfig` raises but leaves the
+session open — the error is catchable, the run-end sweep reaps the
+subprocess if the script aborts, and the error carries the config id and
+the agent's message.
 
 `configOptions()` returns the live option list: each entry has `id`,
 `name`, `type` (`"select"` or `"boolean"`), `currentValue` (the selected
@@ -295,8 +308,8 @@ choice id, or the toggle state), an optional `category` (a UX hint — never
 rely on it), and — for select options — an `options` array of
 `{ id, name, description? }` choices.
 
-`config`/`setConfig` accept strings (select choice ids) or booleans, and
-are serialized with prompt turns: a call issued while a turn is in flight
+`setConfig` accepts strings (select choice ids) or booleans, and is
+serialized with prompt turns: a call issued while a turn is in flight
 waits for it, so config changes apply strictly between turns. On agent
 rejection — or when the agent does not support the method — `setConfig`
 raises a catchable Lua error carrying the config id and the agent's
@@ -308,11 +321,11 @@ message; on success it returns `nil` and updates the live state.
 and subagent personas this way) — enumerate `configOptions()` first and
 never assume a hardcoded id exists. The process-level alternative (env
 vars like `ANTHROPIC_MODEL` in the registry) cannot vary per session; the
-fan-out above — one agent, two models — is exactly what constructor
-`config` (or `setConfig`) is
-for. The [model-fanout example](examples/model-fanout.luau) shows the
-full pattern; successful sets and agent-pushed changes each render one
-lifecycle line (`--verbose`).
+fan-out above — one agent, two models — is exactly what `setConfig`
+before the first prompt is for. The [model-fanout
+example](examples/model-fanout.luau) shows the full pattern; successful
+sets and agent-pushed changes each render one lifecycle line
+(`--verbose`).
 
 ## Checking scripts
 
@@ -412,12 +425,9 @@ Known residuals of the definitions (none affect execution):
   bind the outcome entry to a variable first;
 - typo'd *option* keys in a session-options table literal are not flagged
   by current luau-lsp (a table-literal excess-key limitation) — invented
-  *outcome* fields (`r.txt`) are flagged, double-check option names by hand;
-- mixed `config` tables (string and boolean values together) are flagged
-  by current luau-lsp — table literals never unify with union-valued index
-  signatures, so the option is declared as `{ [string]: string } |
-  `{ [string]: boolean }` (mixed splits into the constructor plus a
-  `setConfig` call, or an annotated table); execution is unaffected;
+  *outcome* fields (`r.txt`) are flagged, double-check option names by
+  hand; a `config` key is the removed constructor option and is rejected
+  at runtime, pre-spawn;
 - the require-tree restriction (no paths escaping the script directory) is
   not enforced by editor analysis (luau-lsp resolves requires without
   ponos's escape-guard); the runtime enforces it at require time and

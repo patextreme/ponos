@@ -1,15 +1,21 @@
 --!strict
 -- Per-session model fan-out: one agent, two sessions, two models.
--- The `config` session option pins each session's model at creation
--- (one setConfig per entry, applied before the constructor returns) —
--- the process-level alternative (env vars in the registry) cannot vary
--- per session. Config option ids and value ids are agent-defined:
--- inspect them at runtime with `s:configOptions()` (the mock agent used
--- here offers a `model` select option and echoes the current value).
+-- Configure each session with a setConfig call right after creation —
+-- before the first prompt. There is no constructor `config` option: a
+-- config table cannot express application order, which matters for
+-- agents with dependent options (e.g. opencode re-derives `effort`
+-- whenever `model` is set), so config is applied with ordered
+-- setConfig calls instead — driving options (like `model`) first. The
+-- process-level alternative (env vars in the registry) cannot vary per
+-- session. Config option ids and value ids are agent-defined: inspect
+-- them at runtime with `s:configOptions()` (the mock agent used here
+-- offers a `model` select option and echoes the current value).
 local agent = ponos.agent("demo")
 
-local reviewer = agent:session({ id = "opus", config = { model = "opus" } })
-local summarizer = agent:session({ id = "haiku", config = { model = "haiku" } })
+local reviewer = agent:session({ id = "opus" })
+reviewer:setConfig("model", "opus")
+local summarizer = agent:session({ id = "haiku" })
+summarizer:setConfig("model", "haiku")
 
 local outcomes = ponos.parallel(
 	{ reviewer, summarizer },

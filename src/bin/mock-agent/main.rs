@@ -78,6 +78,12 @@
 //! - `MOCK_CONFIG_ECHO`   — config id: each turn's reply echoes that
 //!   option's current in-memory value (end-to-end proof that prompts run
 //!   under a changed config)
+//! - `MOCK_CONFIG_DEPENDENT` — any non-empty value: a
+//!   `session/set_config_option` for `model` re-derives `effort` to its
+//!   seeded default in the response state, modeling agents with
+//!   dependent options (opencode-style model → effort reset); pins the
+//!   setConfig sequencing contract: driving option first, dependent
+//!   option last
 //!
 //! The mock is also an MCP client (rmcp): stdio servers suggested in
 //! `session/new { mcpServers }` are spawned, handshaked, and torn down
@@ -176,10 +182,14 @@ impl McpState {
 
 /// Live per-session config-option state (`MOCK_CONFIG_OPTIONS` seed,
 /// mutated by `session/set_config_option` and `MOCK_CONFIG_UPDATE`, read
-/// by `MOCK_CONFIG_ECHO`).
+/// by `MOCK_CONFIG_ECHO`; `MOCK_CONFIG_DEPENDENT` resets dependent
+/// options back into `defaults`).
 #[derive(Default)]
 struct ConfigState {
     options: std::sync::Mutex<Vec<SessionConfigOption>>,
+    /// Seed snapshot (`MOCK_CONFIG_OPTIONS`): the values
+    /// `MOCK_CONFIG_DEPENDENT` re-derives dependent options to.
+    defaults: std::sync::Mutex<Vec<SessionConfigOption>>,
     /// Prompt counter (`MOCK_CONFIG_UPDATE` pushes once, on the first).
     prompts: AtomicU64,
 }
@@ -387,6 +397,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let options: Vec<SessionConfigOption> = serde_json::from_str(&raw)
                             .expect("MOCK_CONFIG_OPTIONS must be a JSON array of config options");
                         *config.options.lock().unwrap() = options.clone();
+                        *config.defaults.lock().unwrap() = options.clone();
                         response = response.config_options(options);
                     }
                     responder.respond(response)
@@ -447,6 +458,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     SessionConfigOptionValue::Boolean { value },
                                 ) => b.current_value = *value,
                                 _ => {}
+                            }
+                        }
+                    }
+                    // MOCK_CONFIG_DEPENDENT: model agents whose option sets
+                    // have internal dependencies — a `model` set re-derives
+                    // `effort` to its seeded default, so only a later
+                    // `effort` set (driving-option-first sequencing) sticks.
+                    if std::env::var("MOCK_CONFIG_DEPENDENT")
+                        .is_ok_and(|v| !v.is_empty())
+                        && req.config_id.0.as_ref() == "model"
+                    {
+                        let default = config
+                            .defaults
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .find(|o| o.id.0.as_ref() == "effort")
+                            .map(|o| o.kind.clone());
+                        if let Some(kind) = default {
+                            for opt in options.iter_mut() {
+                                if opt.id.0.as_ref() == "effort" {
+                                    opt.kind = kind.clone();
+                                }
                             }
                         }
                     }

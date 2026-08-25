@@ -94,8 +94,10 @@ Session options (`agent:session({...})`; all optional):
   command =, args =, env = }` or `{ type = "http", name =, url =,
   headers = }`.
 - `resultSchema` — typed-result contract (see below).
-- `config` — pin config options at creation: `{ model = "opus" }`
-  (see below).
+
+(No `config` option exists — it was removed. Passing `config = { … }`
+raises a catchable error naming `setConfig` as the replacement, before
+any agent subprocess spawns.)
 
 `PromptResult`:
 
@@ -248,28 +250,40 @@ cancelled/timed-out turns discard it.
 ## Per-session config (models, etc.)
 
 Agents expose per-session config (above all the *model*) via ACP config
-options. Pin at creation with `config`, change between turns with
-`setConfig`, enumerate with `configOptions()`:
+options. Apply with `setConfig` calls immediately after `session()`
+returns — before the first prompt — enumerate with `configOptions()`:
 
 ```lua
 --!strict
 local agent = ponos.agent("claude")
-local reviewer = agent:session({ id = "rev", config = { model = "claude-opus-4-5" } })
-reviewer:setConfig("model", "claude-haiku-4-5") -- between turns
+local reviewer = agent:session({ id = "rev" })
+reviewer:setConfig("model", "claude-opus-4-5") -- before the first prompt
+reviewer:setConfig("model", "claude-haiku-4-5") -- or between turns
 for _, o in ipairs(reviewer:configOptions()) do
     ponos.log(("%s = %s"):format(o.id, tostring(o.currentValue)))
 end
 reviewer:close()
 ```
 
+**Sequencing matters and is yours to control.** Some agents re-derive
+dependent options when a driving option is set (opencode resets
+`effort` whenever `model` is set), so set driving options first and
+dependent options last — each awaited `setConfig` sees the state the
+previous one returned. There is no constructor `config` table exactly
+because a Luau table cannot express that order (`pairs()` order is
+unspecified); passing one raises before any subprocess spawns.
+
 **Option ids and value ids are agent-defined** — `"model"` belongs to the
 agent you drive; never assume a hardcoded id exists. Enumerate
 `configOptions()` first. Entries carry `id`, `name`, `type`
 (`"select"` | `"boolean"`), `currentValue`, optional `category` (UX hint
 only), and for selects an `options` array of `{ id, name, description? }`.
-`setConfig`/`config` accept strings (choice ids) or booleans, and are
-serialized with turns — a call issued mid-turn waits, so changes apply
-strictly between turns.
+`setConfig` accepts strings (choice ids) or booleans, and is serialized
+with turns — a call issued mid-turn waits, so changes apply strictly
+between turns. On rejection it raises a catchable error naming the id
+and carrying the agent's message; the session stays open (configure
+right after creation, and close or let the run-end sweep reap on
+error).
 
 ## Registry
 
@@ -286,7 +300,7 @@ env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }
 `${VAR}` interpolates from ponos's environment at resolve time (unset →
 empty); `env` merges over the inherited environment. Process-level env
 cannot vary per session — per-session model fan-out is exactly what
-constructor `config` / `setConfig` are for.
+`setConfig` is for.
 
 ## `ponos check` and pre-flight
 
@@ -320,11 +334,11 @@ so delete dead requires.
 - Outcome narrowing works on locals — bind `local entry = outcomes[i]`
   (or a `for` variable) before `if entry.ok then entry.value …`.
 - Typo'd *option* keys in a session-options literal are **not** flagged
-  by luau-lsp — double-check `id`/`cwd`/`mcpServers`/`resultSchema`/`config`
+  by luau-lsp — double-check `id`/`cwd`/`mcpServers`/`resultSchema`
   spelling by hand (invented result fields like `r.txt` *are* flagged).
-- Mixed `config` tables (string + boolean values together) are flagged by
-  current luau-lsp — split into constructor `config` + a `setConfig` call,
-  or annotate the table.
+- Setting a dependent option before its driving option (e.g. `effort`
+  before `model` on opencode) — the agent's re-derivation silently
+  reverts it; order your `setConfig` calls: driving options first.
 - Empty Luau table `{}` in a schema means JSON object, not array.
 - Unknown literal agent name → check finding and run pre-flight failure;
   registry miss at runtime raises at the `ponos.agent(...)` call.
