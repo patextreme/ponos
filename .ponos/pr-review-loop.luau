@@ -1,7 +1,10 @@
 --!strict
 
+local cfg = require("./config")
+
+-- This loop benchmarks a different default model than the openspec scripts;
+-- keep the override local so the shared DEFAULT_MODEL isn't disturbed.
 const DEFAULT_MODEL = "qwencloud/qwen3.8-max"
-const JUDGE_MODEL = "qwencloud/deepseek-v4-flash-0731"
 
 const PR_URL = ""
 const MAX_ITERATIONS = 15
@@ -24,7 +27,7 @@ while iteration < MAX_ITERATIONS do
 		predicateAgent(
 			"The review verdict does not contain blocking issues",
 			reviewVerdict.text,
-			{ sessionId = `judge-review:{iteration}`, model = JUDGE_MODEL }
+			{ sessionId = `judge-review:{iteration}`, model = cfg.judgeModel }
 		)
 	then
 		reviewer:prompt("Please comment on the PR with Claude's review")
@@ -39,7 +42,7 @@ while iteration < MAX_ITERATIONS do
 		predicateAgent(
 			"The blocking issues require human input to resolve",
 			needHumanResult.text,
-			{ sessionId = `judge-human:{iteration}`, model = JUDGE_MODEL }
+			{ sessionId = `judge-human:{iteration}`, model = cfg.judgeModel }
 		)
 	then
 		error("The change needs human input to resolve the issue")

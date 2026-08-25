@@ -1,8 +1,6 @@
 --!strict
 
-const DEFAULT_MODEL = "qwencloud/qwen3.8-max"
-const JUDGE_MODEL = "qwencloud/deepseek-v4-flash-0731"
-const CHANGE_NAME = "richer-render-logging"
+local cfg = require("./config")
 
 local predicateAgent = require("./predicate")
 
@@ -11,16 +9,16 @@ local pi: Agent = ponos.agent("pi")
 local iteration = 0
 while true do
 	local reviewer: Session = pi:session({ id = `reviewer:{iteration}` })
-	reviewer:setConfig("model", DEFAULT_MODEL)
+	reviewer:setConfig("model", cfg.defaultModel)
 
 	local reviewResult = reviewer:prompt(
-		`Verify the implementation of openspec change named {CHANGE_NAME} using the openspec-verify-change skill`
+		`Verify the implementation of openspec change named {cfg.changeName} using the openspec-verify-change skill`
 	)
 	if
 		predicateAgent(
 			"The verification does not contain critical findings or warnings.",
 			reviewResult.text,
-			{ sessionId = `judge-review:{iteration}`, model = JUDGE_MODEL }
+			{ sessionId = `judge-review:{iteration}`, model = cfg.judgeModel }
 		)
 	then
 		ponos.log("The change is ready to be synced and archived")
@@ -34,7 +32,7 @@ while true do
 		predicateAgent(
 			"The verification result required human input to resolve",
 			needHumanResult.text,
-			{ sessionId = `judge-human:{iteration}`, model = JUDGE_MODEL }
+			{ sessionId = `judge-human:{iteration}`, model = cfg.judgeModel }
 		)
 	then
 		error("The change needs human input to resolve the issue")
@@ -47,5 +45,5 @@ while true do
 end
 
 local archiver: Session = pi:session({ id = "archiver" })
-archiver:setConfig("model", DEFAULT_MODEL)
-archiver:prompt(`Please sync and archive the change {CHANGE_NAME}`)
+archiver:setConfig("model", cfg.defaultModel)
+archiver:prompt(`Please sync and archive the change {cfg.changeName}`)
