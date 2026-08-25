@@ -1,0 +1,17 @@
+[package]
+name = "ponos-acp"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+ponos-core = { path = "../ponos-core" }
+ponos-result = { path = "../ponos-result" }
+agent-client-protocol = { workspace = true }
+async-process = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+libc = { workspace = true }

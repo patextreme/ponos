@@ -1,0 +1,11 @@
+[package]
+name = "ponos-render"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+ponos-core = { path = "../ponos-core" }
+jiff = { workspace = true }

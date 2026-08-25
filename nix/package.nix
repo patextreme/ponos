@@ -11,7 +11,7 @@
 
     commonArgs = {
       pname = "ponos";
-      version = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).package.version;
+      version = (builtins.fromTOML (builtins.readFile ../crates/ponos-cli/Cargo.toml)).package.version;
       CARGO_BUILD_RUSTFLAGS = "-C debuginfo=0";
     };
 

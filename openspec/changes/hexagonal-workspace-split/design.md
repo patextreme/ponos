@@ -105,6 +105,22 @@ untouched". The gate
 was a proxy for no-behavior-change; constructor-arity and path-re-root
 mechanical edits to make an arrow die do not breach it.
 
+**Apply-time amendment:** the `ponos-config` move surfaced a sixth edit
+class the audit missed — `config_fs.rs` carried
+`impl Registry { from_parts }`, an inherent impl on a core type that is
+illegal across the crate boundary (E0116). `from_parts` became a free
+function in `ponos-config` (`ponos::config_fs::from_parts`); folding it
+into core was rejected (core would gain `toml`, breaking its pinned dep
+list and ③'s dependency-guard allowlist). Its call sites ride the same
+three files the transport edit already touches — `tests/script.rs`,
+`tests/e2e.rs` (×2), `tests/acp.rs` — swapping
+`Registry::from_parts(...)` → `ponos::config_fs::from_parts(...)`, plus
+the two module-internal test callers (and the two test-file `Registry`
+imports the swap orphans — `tests/script.rs`, `tests/acp.rs` — drop
+with it, or clippy's `-D warnings` fails). Gate amended to "nine
+mechanical edits"; same class (crate-boundary-forced re-path), zero expectation
+changes.
+
 Alternatives: keep the arrow as a documented crate-level exception (defeats
 the change's purpose; ③ is lints+docs only and cannot absorb it); optional
 dependency (exception with extra steps).
@@ -150,10 +166,12 @@ surface" remains a behavioral contract (AGENTS.md), not a packaging one.
 - [`RunConfig` field addition breaks a test literal not yet found] →
   verified: exactly three sites (`tests/script.rs`, `tests/e2e.rs`,
   `tests/acp.rs` — the only `RunConfig {` literals outside `src/cli.rs`);
-  also verified: the only other move-sensitive test lines are the two
-  `env!("CARGO_MANIFEST_DIR")` joins (`tests/examples.rs`,
-  `tests/cli.rs`; `tests/types.rs`'s target moves with the tests);
-  gate wording pins all five exceptions so review can check it.
+  also amended at apply time: the
+  `env!("CARGO_MANIFEST_DIR")` joins are **not** the only other
+  move-sensitive test lines — `impl Registry { from_parts }` in
+  `config_fs.rs` (missed by the audit) forced the four `from_parts`
+  swaps recorded in D2's apply-time amendment. The gate wording now
+  pins all nine exceptions so review can check it.
 - [Workspace split changes lockfile/features (e.g. feature unification
   shifts mlua/rmcp builds) → build breaks offline] → pin feature sets
   per-member exactly as today's single-crate `Cargo.toml` lists them;

@@ -13,8 +13,9 @@
       description = ''
         Cleaned repo source shared by every derivation that compiles the
         crate (release package, test checks, smoke check). Keeping ONE
-        source matters: the crate embeds non-Rust files at compile time
-        (src/cli.rs does include_str!("../.ponos/ponos.d.luau")), so a
+        source matters: the workspace embeds non-Rust files at compile
+        time (crates/ponos-check/src/defs.rs does
+        include_str!("../../../.ponos/ponos.d.luau")), so a
         cargo-only source filter lets the dependency build and the test
         suite pass while the package build fails — exactly how `nix run`
         once regressed with `nix flake check` still green.
