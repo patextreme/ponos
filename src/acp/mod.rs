@@ -41,7 +41,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::core::config::AgentSpec;
 use crate::core::contract::ResultContract;
 use crate::core::events::{PlanEntry, PlanStatus, SessionEvent};
-use crate::core::ports::{EventSink, select_allow_option};
+use crate::core::ports::{EventSink, HeadlessPolicy, InteractionPolicy};
 use crate::core::turn::{PeekInputs, TurnFold, status_string, submission_sink};
 use crate::result_wire::{bind_result_socket, spawn_result_channel};
 
@@ -387,6 +387,10 @@ pub async fn start_session(
     let driver_sink = sink.clone();
     let driver_config = config_options.clone();
 
+    // Headless permission posture for this session's agent→client
+    // requests; the policy is the seam an interactive front end replaces.
+    let policy: Arc<dyn InteractionPolicy> = Arc::new(HeadlessPolicy);
+
     let driver = tokio::spawn(async move {
         let child_guard = child;
         let stderr_task = stderr_task;
@@ -395,6 +399,7 @@ pub async fn start_session(
         let notif_sink = driver_sink.clone();
         let notif_label = driver_label.clone();
         let notif_config = driver_config.clone();
+        let permission_policy = policy.clone();
 
         let builder = Client
             .builder()
@@ -427,20 +432,18 @@ pub async fn start_session(
                 },
                 agent_client_protocol::on_receive_dispatch!(),
             )
-            // Headless allow-all posture: select an allow option the agent
-            // offered — the first `AllowAlways` when present, otherwise the
-            // first other allow-kind option (e.g. `AllowOnce`). An offer
-            // with no allow option at all falls back to method-not-found
-            // (there is nothing to select). Choosing `AllowAlways` may let
-            // the agent persist an allow rule in its own settings beyond
-            // the run (documented in the README).
+            // The interaction policy answers permission requests (the
+            // headless policy selects an allow option the agent offered —
+            // see its docs). An offer with nothing selectable falls back
+            // to method-not-found; every other request kind is answered
+            // by the dispatch handler above.
             .on_receive_request(
                 async move |req: RequestPermissionRequest,
                             responder: agent_client_protocol::Responder<
                     RequestPermissionResponse,
                 >,
                             _cx| {
-                    match select_allow_option(&req.options) {
+                    match permission_policy.select_permission(&req.options) {
                         Some(option_id) => responder.respond(RequestPermissionResponse::new(
                             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                                 option_id,

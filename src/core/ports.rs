@@ -1,9 +1,8 @@
 //! Ports and policies: the seams where adapters plug into the core.
 //!
-//! Today this module holds the headless interaction policy — the
-//! decision rule for agent→client `session/request_permission` requests
-//! — and the [`EventSink`] port. The remaining ports (config source,
-//! agent transport) land here as the restructure proceeds.
+//! Today this module holds the [`EventSink`] port and the headless
+//! [`InteractionPolicy`]. The remaining ports (config source, agent
+//! transport) land here as the restructure proceeds.
 
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionId, PermissionOptionKind,
@@ -21,6 +20,29 @@ pub trait EventSink: Send + Sync {
     /// A script-initiated log line (`ponos.log`): not a session event
     /// and not suppressed by `--quiet`.
     fn script_log(&self, message: &str);
+}
+
+/// Decisions for agent→client requests that would otherwise need a user
+/// present. ponos runs headless; the policy is the exact seam a TUI (or
+/// any interactive front end) needs to make permissions interactive
+/// without touching transport code.
+pub trait InteractionPolicy: Send + Sync {
+    /// The option id to answer `session/request_permission` with, or
+    /// `None` when the offer has no allow option to select (the adapter
+    /// then answers method-not-found).
+    fn select_permission(&self, options: &[PermissionOption]) -> Option<PermissionOptionId>;
+}
+
+/// The headless posture: prefer `AllowAlways`, else the first other
+/// allow-kind option (documented in the README; choosing `AllowAlways`
+/// may let the agent persist an allow rule in its own settings beyond
+/// the run).
+pub struct HeadlessPolicy;
+
+impl InteractionPolicy for HeadlessPolicy {
+    fn select_permission(&self, options: &[PermissionOption]) -> Option<PermissionOptionId> {
+        select_allow_option(options)
+    }
 }
 
 /// Pick the option to answer a permission request with: the first
@@ -78,5 +100,21 @@ mod tests {
         ];
         assert_eq!(select_allow_option(&options), None);
         assert_eq!(select_allow_option(&[]), None);
+    }
+
+    #[test]
+    fn headless_policy_implements_the_selection_rule() {
+        let policy = HeadlessPolicy;
+        let options = vec![
+            option("reject_once", PermissionOptionKind::RejectOnce),
+            option("allow_once", PermissionOptionKind::AllowOnce),
+            option("allow_always", PermissionOptionKind::AllowAlways),
+        ];
+        let dyn_policy: &dyn InteractionPolicy = &policy;
+        assert_eq!(
+            dyn_policy.select_permission(&options),
+            Some(PermissionOptionId::new("allow_always"))
+        );
+        assert_eq!(dyn_policy.select_permission(&[]), None);
     }
 }
