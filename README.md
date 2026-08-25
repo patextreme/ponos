@@ -73,23 +73,38 @@ Streaming output is plain stdout, one line per event, each prefixed with a
 local wall-clock timestamp and the session attribution:
 
 ```
-21:07:33 [claude/reviewer] tool: Search files "foo"
-21:07:36 [claude/reviewer] tool: Search files "foo" (completed, 3.2s)
-21:07:41 [claude/reviewer] Looks fine — two nits below.
-21:07:41 [ponos] log line from ponos.log
+2026-08-25 21:07:33 [claude/reviewer] prompt: review the auth module for drift against the spec
+2026-08-25 21:07:33 [claude/reviewer] tool: bash git status
+2026-08-25 21:07:36 [claude/reviewer] tool: bash git status (completed, 2.9s)
+2026-08-25 21:07:37 [claude/reviewer] tool: read src/render/mod.rs:118
+2026-08-25 21:07:41 [claude/reviewer] Looks fine — two nits below.
+2026-08-25 21:07:41 [ponos] log line from ponos.log
 ```
 
-- Timestamps are always on (no flag): 24-hour `HH:MM:SS` local time, dimmed
+- Timestamps are always on (no flag): local `yyyy-mm-dd HH:MM:SS`, dimmed
   under color, plain text with `--no-color`. `--quiet` suppresses rendered
   output as before. Script `print` bypasses the renderer and is emitted
   verbatim.
-- A tool call renders at most two lines: the tool's title when it enters
-  `in_progress`, and the title with status and wall-clock duration when it
-  settles — `tool: Search files "foo" (completed, 3.2s)` (`1m 05.0s` past the
-  minute). Update lines resolve the title announced by the `tool_call`; the
-  raw call id appears only when an update precedes its announcement.
-  `pending` announcements and repeated identical statuses render nothing, so
-  agents that resend the same status cannot flood the log.
+- Every prompt renders one `prompt:` line at send time: the prompt text
+  with whitespace runs collapsed to single spaces, truncated to a
+  120-visible-char budget with a trailing `…` when cut. Suppressed by
+  `--quiet` like all rendered output.
+- A tool call renders at most two lines: the tool's title with an input
+  peek appended when it enters `in_progress`, and the same title + peek
+  with status and wall-clock duration when it settles —
+  `tool: bash git status (completed, 2.9s)` (`1m 05.0s` past the minute).
+  The peek is chosen from the tool call's own data, kind-aware: `execute`
+  calls show the `command`/`cmd` string from the raw input; `read`/`edit`/
+  `move`/`search`/`fetch`/`delete` calls show the first location as
+  `path[:line]`, shortened relative to the session's cwd (`~/…` under the
+  user's home, absolute otherwise); anything else shows the raw input as
+  compact JSON. Peeks share the prompt line's 120-char budget and are
+  skipped when the title already contains them (pi-acp-style bash titles
+  are the command itself). Update lines resolve the title announced by the
+  `tool_call`; the raw call id appears only when an update precedes its
+  announcement. `pending` announcements and repeated identical statuses
+  render nothing, so agents that resend the same status cannot flood the
+  log.
 
 ## Agent registry
 

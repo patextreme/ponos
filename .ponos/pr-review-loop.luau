@@ -2,7 +2,8 @@
 
 const DEFAULT_MODEL = "qwencloud/qwen3.8-max"
 const JUDGE_MODEL = "qwencloud/deepseek-v4-flash-0731"
-const CHANGE_NAME = "richer-render-logging"
+
+const PR_URL = ""
 
 local predicateAgent = require("./predicate")
 
@@ -13,26 +14,25 @@ while true do
 	local reviewer: Session = pi:session({ id = `reviewer:{iteration}` })
 	reviewer:setConfig("model", DEFAULT_MODEL)
 
-	local reviewResult = reviewer:prompt(
-		`Verify the implementation of openspec change named {CHANGE_NAME} using the openspec-verify-change skill`
-	)
+	reviewer:prompt(`Please ask Claude CLI to review the PR {PR_URL}`)
+	local reviewVerdict = reviewer:prompt("Based on Claude's review feedback, determine the blocking issues and non-blocking issues.")
 	if
 		predicateAgent(
-			"The verification does not contain critical findings or warnings.",
-			reviewResult.text,
+			"The review verdict does not contain blocking issues",
+			reviewVerdict.text,
 			{ sessionId = `judge-review:{iteration}`, model = JUDGE_MODEL }
 		)
 	then
-		ponos.log("The change is ready to be synced and archived")
+	  reviewer:prompt("Please comment on the PR with Claude's review in the comment")
 		break
 	end
 
 	local needHumanResult = reviewer:prompt(
-		`For the critical and warning severity findings, do you know how to resolve them, or do you need human input?`
+		`For the blocking issues, do you know how to resolve them, or do you need human input?`
 	)
 	if
 		predicateAgent(
-			"The verification result required human input to resolve",
+			"The blocking issues require human input to resolve",
 			needHumanResult.text,
 			{ sessionId = `judge-human:{iteration}`, model = JUDGE_MODEL }
 		)
@@ -46,6 +46,3 @@ while true do
 	iteration += 1
 end
 
-local archiver: Session = pi:session({ id = "archiver" })
-archiver:setConfig("model", DEFAULT_MODEL)
-archiver:prompt(`Please sync and archive the change {CHANGE_NAME}`)
