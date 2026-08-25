@@ -26,4 +26,5 @@
 ## 6. Docs and specs
 
 - [ ] 6.1 Rewrite README's Output format section (new example block with dated timestamps, prompt lines, peeks; document the truncation budget and quiet behavior); verify doc example lines match the e2e test output exactly
-- [ ] 6.2 Run `openspec validate richer-render-logging --strict` and fix any findings; verify delta specs parse and scenarios are complete
+- [ ] 6.2 Add the `cli` capability delta (`specs/cli/spec.md`): MODIFIED "Rendered lines are timestamped" → `yyyy-mm-dd HH:MM:SS` shape delegated to the `render-logging` capability; verify the MODIFIED header matches the current `openspec/specs/cli/spec.md` requirement verbatim (so archive resolves it) and the full requirement block including all three scenarios is restated
+- [ ] 6.3 Run `openspec validate richer-render-logging --strict` and fix any findings; verify delta specs parse and scenarios are complete

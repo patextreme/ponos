@@ -390,7 +390,7 @@ reach a global the runtime poisons. Definitions apply workspace-wide, so
 keep them out of mixed Luau projects you don't run under ponos.
 
 Helix needs no per-user setup: the repo ships `.helix/languages.toml`,
-which points luau-lsp at `types/ponos.d.luau` (standard platform) for
+which points luau-lsp at `.ponos/ponos.d.luau` (standard platform) for
 any file in this workspace. Other editors — configure your own (VS Code
 luau-lsp extension settings; "standard" platform, not
 Roblox):

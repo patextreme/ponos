@@ -17,14 +17,10 @@ reviewer:setConfig("model", "opus")
 local summarizer = agent:session({ id = "haiku" })
 summarizer:setConfig("model", "haiku")
 
-local outcomes = ponos.parallel(
-	{ reviewer, summarizer },
-	function(s: Session)
-		local r = s:prompt("Which model are you running under? One word.")
-		return ("%s → %s"):format(s:label(), tostring(r))
-	end,
-	{ concurrency = 2 }
-)
+local outcomes = ponos.parallel({ reviewer, summarizer }, function(s: Session)
+	local r = s:prompt("Which model are you running under? One word.")
+	return ("%s → %s"):format(s:label(), tostring(r))
+end, { concurrency = 2 })
 
 for _, entry in ipairs(outcomes) do
 	if entry.ok then

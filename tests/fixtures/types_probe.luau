@@ -1,6 +1,6 @@
 --!strict
 --
--- Runtime probe for `types/ponos.d.luau`: exercises every member, method,
+-- Runtime probe for `.ponos/ponos.d.luau`: exercises every member, method,
 -- and field the definitions promise, against the mock agent. Wired as a
 -- cargo test (tests/types.rs substitutes @MOCK_BIN@ with the mock binary)
 -- and analyzed by the `ponos-analyze` nix check. If a member documented in

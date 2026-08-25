@@ -53,7 +53,7 @@
       ponos --version
       ponos --help > /dev/null
 
-      # The embedded definitions (include_str! of types/ponos.d.luau in
+      # The embedded definitions (include_str! of .ponos/ponos.d.luau in
       # src/cli.rs) must actually be in the release binary.
       ponos types | head -n1 | grep -q "type definitions"
 
@@ -74,7 +74,7 @@
     # Static-analysis gate for the Luau surface: every bundled script
     # (examples, type-definition probe fixture) must pass luau-lsp in
     # strict mode (per-file --!strict directives; no committed .luaurc)
-    # against the repo definitions. Keeps examples and types/ponos.d.luau
+    # against the repo definitions (.ponos/ponos.d.luau). Keeps examples
     # honest in the same direction as the runtime probe test.
     checks.ponos-analyze = pkgs.stdenv.mkDerivation {
       pname = "ponos-analyze";
@@ -89,7 +89,7 @@
       checkPhase = ''
         runHook preCheck
         luau-lsp analyze --platform=standard \
-          --definitions=types/ponos.d.luau \
+          --definitions=.ponos/ponos.d.luau \
           examples/*.luau tests/fixtures/*.luau
         runHook postCheck
       '';

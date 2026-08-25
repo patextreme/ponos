@@ -5,9 +5,9 @@ local agent = ponos.agent("demo")
 local s = agent:session({ id = "slow" })
 
 local work = ponos.spawn(function()
-    local r = s:prompt("Take your time on this one")
-    ponos.log(("turn finished: stopReason=%s"):format(r.stopReason))
-    return r.stopReason
+	local r = s:prompt("Take your time on this one")
+	ponos.log(("turn finished: stopReason=%s"):format(r.stopReason))
+	return r.stopReason
 end)
 
 ponos.sleep(300)

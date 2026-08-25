@@ -14,7 +14,7 @@ owns its own agent subprocess; closing a session reaps the process.
 - Source repo (deep investigation): **https://github.com/patextreme/ponos**
   - `README.md` — the full API/behavior truth. Read it first when this
     skill's summary is not enough.
-  - `types/ponos.d.luau` — the script API type definitions, embedded
+  - `.ponos/ponos.d.luau` — the script API type definitions, embedded
     verbatim in the binary; the single source of truth for shapes.
   - `examples/*.luau` — vetted scripts (sequential, fan-out, model
     fan-out, watchdog, typed results).

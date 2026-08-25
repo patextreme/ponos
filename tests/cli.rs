@@ -81,7 +81,7 @@ fn types_prints_version_header_and_definitions() {
         format!("-- ponos {} type definitions", env!("CARGO_PKG_VERSION"))
     );
     let repo_defs = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("types/ponos.d.luau"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ponos/ponos.d.luau"),
     )
     .unwrap();
     assert_eq!(body, repo_defs, "emitted defs must be byte-identical");

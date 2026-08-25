@@ -43,6 +43,11 @@ over the wire and is discarded.
   input peek appended after the title, and requires that prompt sends render
   a prompt line. Scenario-level wording for start/terminal lines and flood
   guards stays, with the peek folded in.
+- `cli`: the "Rendered lines are timestamped" requirement's shape changes
+  from `HH:MM:SS` to `yyyy-mm-dd HH:MM:SS`, delegating the shape to the
+  `render-logging` capability (single source of truth). Spec-only delta:
+  the flag semantics it governs (always-on, `--no-color` plain text,
+  `--quiet` suppression, `print` untouched) are unchanged.
 
 ## Impact
 
@@ -59,4 +64,6 @@ over the wire and is discarded.
   dates/peeks; new tests for prompt lines, peek kinds, dedup, truncation,
   path shortening.
 - `README.md` — Output format section rewritten to match.
+- `openspec/` — new `specs/cli/` delta (timestamp shape, delegated to
+  `render-logging`) alongside the `agent-sessions` delta; no code impact.
 - No dependency changes; no Luau API changes.
