@@ -34,11 +34,6 @@ fn escapes(root: &Path, path: &Path) -> bool {
     !path.starts_with(root)
 }
 
-/// A literal require string is navigable only when explicitly relative.
-fn is_relative_module(module: &str) -> bool {
-    module.starts_with("./") || module.starts_with("../")
-}
-
 /// Resolve an already-joined module path to a physical file:
 /// `<p>.luau`, `<p>.lua`, `<p>/init.luau`, `<p>/init.lua`.
 fn resolve_file(path: &Path) -> Option<PathBuf> {
@@ -55,14 +50,6 @@ fn resolve_file(path: &Path) -> Option<PathBuf> {
         }
     }
     None
-}
-
-/// Statically resolve a literal require argument (e.g. `"./lib/util"`)
-/// exactly as the runtime navigator would, relative to the requiring
-/// file's directory: the physical module file when a candidate exists,
-/// `None` when none does.
-fn resolve_candidates(from_dir: &Path, module: &str) -> Option<PathBuf> {
-    resolve_file(&normalize(&from_dir.join(module)))
 }
 
 /// A requirer rooted at the entry script's directory.
@@ -252,32 +239,8 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Pure helpers (shared with the static checker)
+    // Pure helpers (the navigator's directory rules)
     // ------------------------------------------------------------------
-
-    #[test]
-    fn pure_helpers_resolve_candidates() {
-        let dir = tmp();
-        let main = dir.join("main.luau");
-        assert_eq!(
-            resolve_candidates(main.parent().unwrap(), "./lib/util"),
-            Some(dir.join("lib/util.luau"))
-        );
-        assert_eq!(
-            resolve_candidates(main.parent().unwrap(), "./lib/sub"),
-            Some(dir.join("lib/sub/init.luau"))
-        );
-        assert_eq!(
-            resolve_candidates(main.parent().unwrap(), "./lib/nope"),
-            None
-        );
-        // Parent-relative from a nested directory.
-        let nested = dir.join("lib/sub");
-        assert_eq!(
-            resolve_candidates(&nested, "../util"),
-            Some(dir.join("lib/util.luau"))
-        );
-    }
 
     #[test]
     fn pure_helpers_normalize_and_escape() {
@@ -286,10 +249,5 @@ mod tests {
         assert!(escapes(root, &normalize(&root.join("../../outside"))));
         // `..` at the root pops; anything landing outside the root escapes.
         assert!(escapes(root, &normalize(&root.join(".."))));
-        assert!(is_relative_module("./x"));
-        assert!(is_relative_module("../x"));
-        assert!(!is_relative_module("x"));
-        assert!(!is_relative_module("@alias/x"));
-        assert!(!is_relative_module("/abs/x"));
     }
 }
