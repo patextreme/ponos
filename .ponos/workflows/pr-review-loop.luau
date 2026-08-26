@@ -1,11 +1,12 @@
 --!strict
 
-local cfg = require("./config")
+local pr_review_loop = require("../pr-review-loop")
+local cfg = require("./../utils/config")
 
 const PR_URL = "https://github.com/patextreme/ponos/pull/3"
 const MAX_ITERATIONS = 15
 
-local predicateAgent = require("./predicate")
+local predicateAgent = require("./../utils/predicate")
 
 local pi: Agent = ponos.agent("pi")
 
@@ -15,8 +16,8 @@ while iteration < MAX_ITERATIONS do
 	local reviewer: Session = pi:session({ id = `reviewer:{iteration}` })
 	reviewer:setConfig("model", cfg.defaultModel)
 
-	reviewer:prompt(`Please ask Claude CLI to review the PR {PR_URL}`)
-	local reviewVerdict = reviewer:prompt("Based on Claude's review feedback, determine the blocking issues and non-blocking issues.")
+	reviewer:prompt(`Use the review instruction at .ponos/instructions/review-instruction.md to review PR {PR_URL}`)
+	local reviewVerdict = reviewer:prompt("Based on the review feedback, determine the blocking issues and non-blocking issues.")
 	ponos.log("Review verdict: " .. reviewVerdict.text)
 
 	if
@@ -26,13 +27,15 @@ while iteration < MAX_ITERATIONS do
 			{ sessionId = `judge-review:{iteration}`, model = cfg.judgeModel }
 		)
 	then
-		reviewer:prompt("Please comment on the PR with Claude's review")
+		reviewer:prompt("Please comment on the PR with review feedback along with verdict")
 		converged = true
 		break
 	end
 
+	reviewer:prompt("For each of the blocking issues, please use subagent to validate if issue is valid.")
+
 	local needHumanResult = reviewer:prompt(
-		"For the blocking issues, do you know how to resolve them, or do you need human input?"
+		"For the blocking issues remaining, do you know how to resolve them, or do you need human input?"
 	)
 	if
 		predicateAgent(
@@ -48,7 +51,7 @@ while iteration < MAX_ITERATIONS do
 	ponos.log("Fix result: " .. fixResult.text)
 
 	reviewer:prompt("Commit the changes and push them to the PR branch so the next review sees them.")
-	reviewer:prompt("Also comment on the PR with Claude's review")
+	reviewer:prompt("Also comment on the PR with review feedback")
 	iteration += 1
 end
 
