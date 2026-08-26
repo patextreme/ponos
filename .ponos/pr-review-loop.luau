@@ -2,11 +2,7 @@
 
 local cfg = require("./config")
 
--- This loop benchmarks a different default model than the openspec scripts;
--- keep the override local so the shared DEFAULT_MODEL isn't disturbed.
-const DEFAULT_MODEL = "qwencloud/qwen3.8-max"
-
-const PR_URL = ""
+const PR_URL = "https://github.com/patextreme/ponos/pull/3"
 const MAX_ITERATIONS = 15
 
 local predicateAgent = require("./predicate")
@@ -17,7 +13,7 @@ local converged = false
 local iteration = 0
 while iteration < MAX_ITERATIONS do
 	local reviewer: Session = pi:session({ id = `reviewer:{iteration}` })
-	reviewer:setConfig("model", DEFAULT_MODEL)
+	reviewer:setConfig("model", cfg.defaultModel)
 
 	reviewer:prompt(`Please ask Claude CLI to review the PR {PR_URL}`)
 	local reviewVerdict = reviewer:prompt("Based on Claude's review feedback, determine the blocking issues and non-blocking issues.")
