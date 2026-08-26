@@ -149,7 +149,7 @@ fn relative_script_path_with_require_runs() {
     // A script invoked through a relative path (with a directory
     // component) must still be able to require sibling modules: the
     // require sandbox root must share the absolute namespace of chunk
-    // names, or every require is rejected as escaping the tree.
+    // names so relative requires resolve against the requiring file.
     let project = Project::new("relative-require", &[]);
     std::fs::create_dir_all(project.dir.join("sub")).unwrap();
     std::fs::write(project.dir.join("sub/mod.luau"), "return 42").unwrap();

@@ -47,7 +47,7 @@ The check SHALL statically analyze the entry and every file reachable through li
 - **WHEN** a reachable file contains `ponos.agent(name)` where `name` is a variable
 - **THEN** the check reports no finding for that call
 
-#### Scenario: Require escaping the script tree
+#### Scenario: Require outside the entry tree is not a finding
 - **WHEN** a reachable file contains `require("../../outside")` and the target resolves to an existing module file outside the entry script's directory
 - **THEN** the check reports no finding for that require
 

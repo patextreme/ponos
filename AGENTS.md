@@ -67,7 +67,8 @@ exceptions).
   agent pushes and `setConfig`), serialized with turns via the turn lock.
 - `crates/ponos-luau` — mlua (Luau) runtime. Scripts run sandboxed (no
   I/O, network, debug); `require` resolves `.luau` modules relative to
-  the requiring file and rejects escapes. One deviation: a `coroutine`
+  the requiring file; requires may traverse outside the entry script's
+  directory (no tree boundary). One deviation: a `coroutine`
   table with only `yield` stays visible because the async runtime needs
   it.
 - `crates/ponos-check` — `ponos check` pipeline (compile pass via mlua,
