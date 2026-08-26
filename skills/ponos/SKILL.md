@@ -18,9 +18,10 @@ owns its own agent subprocess; closing a session reaps the process.
     verbatim in the binary; the single source of truth for shapes.
   - `examples/*.luau` — vetted scripts (sequential, fan-out, model
     fan-out, watchdog, typed results).
-  - `src/script/` (Luau runtime + sandbox), `src/acp/` (ACP client),
-    `src/check*` (`check` pipeline), `src/bin/mock-agent/` (scriptable
-    test agent used by the offline test suite).
+  - `crates/ponos-luau/` (Luau runtime + sandbox), `crates/ponos-acp/`
+    (ACP client), `crates/ponos-check/` (`check` pipeline),
+    `crates/ponos-cli/src/bin/mock-agent/` (scriptable test agent used
+    by the offline test suite).
 - `ponos types` prints the type definitions matching the *installed*
   binary — no registry or agents needed. `ponos --version` confirms the
   binary exists.

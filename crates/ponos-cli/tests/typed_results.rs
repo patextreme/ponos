@@ -171,7 +171,7 @@ async fn bridge_subcommand_round_trips_submits_and_violations() {
         .call_tool(CallToolRequestParams::new("result_submit").with_arguments(args))
         .await
         .expect("call tool");
-    assert_ne!(result.is_error, Some(true), "{:?}", result);
+    assert_ne!(result.is_error, Some(true), "{result:?}");
 
     // Invalid submit: tool error naming the violation.
     let mut args = serde_json::Map::new();
@@ -180,7 +180,7 @@ async fn bridge_subcommand_round_trips_submits_and_violations() {
         .call_tool(CallToolRequestParams::new("result_submit").with_arguments(args))
         .await
         .expect("call tool");
-    assert_eq!(result.is_error, Some(true), "{:?}", result);
+    assert_eq!(result.is_error, Some(true), "{result:?}");
     let text: String = result
         .content
         .iter()
@@ -193,7 +193,7 @@ async fn bridge_subcommand_round_trips_submits_and_violations() {
         .call_tool(CallToolRequestParams::new("other_tool"))
         .await
         .expect("call tool");
-    assert_eq!(result.is_error, Some(true), "{:?}", result);
+    assert_eq!(result.is_error, Some(true), "{result:?}");
 
     // Gracefully close the client first (closes the transport and waits
     // for the child to exit): joining the stub thread while the runtime is

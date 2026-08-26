@@ -78,7 +78,7 @@ impl Require for ScriptRequirer {
             .strip_prefix('@')
             .ok_or(NavigateError::NotFound)?;
         // Chunk line suffixes ("file.luau:12") are not module paths.
-        let raw = raw.rsplit_once(':').map(|(p, _)| p).unwrap_or(raw);
+        let raw = raw.rsplit_once(':').map_or(raw, |(p, _)| p);
         let path = normalize(Path::new(raw));
         let path = if path.is_absolute() {
             path

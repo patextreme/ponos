@@ -238,7 +238,7 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         std::iter::once("ponos".to_string())
-            .chain(list.iter().map(|s| s.to_string()))
+            .chain(list.iter().map(std::string::ToString::to_string))
             .collect()
     }
 

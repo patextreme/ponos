@@ -417,7 +417,9 @@ fn format_duration(d: Duration) -> String {
 
 /// Protocol `ToolCallStatus` as its fold policy name.
 pub fn status_string(status: &agent_client_protocol::schema::v1::ToolCallStatus) -> String {
-    use agent_client_protocol::schema::v1::ToolCallStatus::*;
+    use agent_client_protocol::schema::v1::ToolCallStatus::{
+        Completed, Failed, InProgress, Pending,
+    };
     match status {
         Pending => "pending".into(),
         InProgress => "in_progress".into(),

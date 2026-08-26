@@ -845,8 +845,7 @@ bash:close(); read:close()
         .map(common::strip_timestamp)
         .map(|l| {
             l.split_once("] ")
-                .map(|(_, b)| b.to_string())
-                .unwrap_or_else(|| l.to_string())
+                .map_or_else(|| l.to_string(), |(_, b)| b.to_string())
         })
         .collect();
     // Each example line appears verbatim (durations are live, so the

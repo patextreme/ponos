@@ -81,10 +81,7 @@ s:close()
 fn cross_tree_require_runs() {
     // Entry and helper live in sibling trees; the run must succeed with
     // `require("../shared/helper")` walking out of the entry directory.
-    let base = std::env::temp_dir().join(format!(
-        "ponos-e2e-{}-cross-require",
-        std::process::id()
-    ));
+    let base = std::env::temp_dir().join(format!("ponos-e2e-{}-cross-require", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("workflow")).unwrap();
     std::fs::create_dir_all(base.join("shared")).unwrap();
@@ -102,7 +99,7 @@ fn cross_tree_require_runs() {
     .unwrap();
     std::fs::write(
         base.join("workflow/main.luau"),
-        &format!(
+        format!(
             r#"
 local helper = require("../shared/helper")
 local agent = ponos.agent({{ command = "{mock}", env = {{ MOCK_CHUNKS = "Hel|lo" }} }})
@@ -599,8 +596,8 @@ assert(type(r.text) == "string", "survivor must stay usable after the sibling cl
             token_b = token_b
         ),
     );
-    let run_dir = dir.clone();
-    let run_script = script.clone();
+    let run_dir = dir;
+    let run_script = script;
     let runner = std::thread::spawn(move || run(&run_script, &run_dir));
     wait_for_processes(&token_a, 0, "closed session reaped by close()");
     wait_for_processes(&token_b, 1, "same-label survivor alive mid-run");

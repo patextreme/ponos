@@ -41,4 +41,28 @@ tempfile = "3"
 # sets, the dependency-direction floor — is change ③ (hexagonal-polish).
 # Member crates inherit via `[lints] workspace = true` so future
 # tightening lands here once, for everyone.
+# Lint policy (change ③ hexagonal-polish, design D2): every member
+# inherits this table; tightening lands here once, for everyone.
+#
+# Adopted: rustc invariant lints that fire zero times on the pin
+# (documentation of floor, not churn) plus the mechanical clippy set
+# whose fixups cargo/clippy applies behavior-neutrally. Deliberate
+# non-adoptions and their reasons are recorded in the change's
+# design.md D2.
 [workspace.lints]
+rust.unsafe_op_in_unsafe_fn = "warn"
+rust.rust_2018_idioms = "warn"
+rust.elided_lifetimes_in_paths = "warn"
+rust.missing_abi = "warn"
+clippy.redundant_clone = "warn"
+clippy.assigning_clones = "warn"
+clippy.map_unwrap_or = "warn"
+clippy.redundant_closure_for_method_calls = "warn"
+clippy.semicolon_if_nothing_returned = "warn"
+clippy.uninlined_format_args = "warn"
+clippy.unnecessary_join = "warn"
+clippy.unnecessary_debug_formatting = "warn"
+clippy.enum_glob_use = "warn"
+clippy.needless_continue = "warn"
+clippy.if_not_else = "warn"
+clippy.bool_to_int_with_if = "warn"

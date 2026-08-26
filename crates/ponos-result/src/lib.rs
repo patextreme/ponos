@@ -96,7 +96,6 @@ pub async fn bind_result_socket() -> std::io::Result<(UnixListener, PathBuf)> {
             Ok(listener) => return Ok((listener, path)),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 // Live socket holds the name: pick another.
-                continue;
             }
             Err(e) => return Err(e),
         }
@@ -120,12 +119,12 @@ async fn bind_at(path: &std::path::Path) -> std::io::Result<UnixListener> {
             )
             .await
             .is_ok_and(|r| r.is_ok());
-            if !live {
+            if live {
+                Err(e)
+            } else {
                 // Stale: no listener behind the file. Unlink and rebind.
                 let _ = std::fs::remove_file(path);
                 UnixListener::bind(path)
-            } else {
-                Err(e)
             }
         }
         Err(e) => Err(e),

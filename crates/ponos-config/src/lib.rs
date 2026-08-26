@@ -100,7 +100,7 @@ pub fn find_project_config(start: &Path) -> Option<PathBuf> {
         }
         {
             let parent = dir.parent()?;
-            dir = parent
+            dir = parent;
         }
     }
 }

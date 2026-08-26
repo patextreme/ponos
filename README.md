@@ -470,7 +470,7 @@ ponos run examples/sequential_review.luau
 
 ## Development
 
-- `src/bin/mock-agent/` — a scriptable ACP agent (with an MCP client for
+- `crates/ponos-cli/src/bin/mock-agent/` — a scriptable ACP agent (with an MCP client for
   suggested servers) used by the offline test suite (`MOCK_CHUNKS`,
   `MOCK_HANG`, `MOCK_PERMISSION` (`once`/`always`/`reject`), `MOCK_TOOL`,
   `MOCK_TOOL_FLOW` (status-sequence replay), `MOCK_PLAN`, `MOCK_USAGE`,

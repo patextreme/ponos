@@ -173,7 +173,7 @@ pub fn preflight(script: &Path, registry: &Registry) -> Vec<Finding> {
     };
 
     let walked = lint::walk(&entry);
-    let mut files = vec![(entry.clone(), source)];
+    let mut files = vec![(entry, source)];
     for file in &walked.parsed {
         if let Ok(src) = std::fs::read_to_string(&file.path) {
             files.push((file.path.clone(), src));
@@ -286,10 +286,7 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    path.is_file()
-        && std::fs::metadata(path)
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+    path.is_file() && std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
 }
 
 fn find_luau_lsp() -> Option<PathBuf> {

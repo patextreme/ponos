@@ -68,7 +68,7 @@ fn interpolate(s: &str, lookup: &dyn Fn(&str) -> Option<String>) -> String {
             Some(end) => {
                 let var = &after[..end];
                 if let Some(v) = lookup(var) {
-                    out.push_str(&v)
+                    out.push_str(&v);
                 }
                 rest = &after[end + 1..];
             }
@@ -166,7 +166,7 @@ mod tests {
     fn spec(command: &str, args: &[&str], env: &[(&str, &str)]) -> AgentSpec {
         AgentSpec {
             command: command.into(),
-            args: args.iter().map(|s| s.to_string()).collect(),
+            args: args.iter().map(std::string::ToString::to_string).collect(),
             env: env
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))

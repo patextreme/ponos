@@ -115,7 +115,7 @@ pub async fn run(cfg: RunConfig) -> RunOutcome {
     let undelivered = state.tasks.undelivered_errors();
     teardown(&state, false).await;
     RunOutcome {
-        code: if undelivered.is_empty() { 0 } else { 1 },
+        code: i32::from(!undelivered.is_empty()),
         error: None,
         undelivered_errors: undelivered,
     }

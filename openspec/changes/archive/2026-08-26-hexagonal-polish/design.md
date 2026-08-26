@@ -59,8 +59,11 @@ on:
   (schema-data exception), and never its connection/client types.
 
 Allowlist (explicit paths + reasons in the test file): `std::env` reads,
-`tokio::sync`, `tokio::task::spawn_local` (task.rs only), mlua in task.rs,
-ACP schema types in the four modules above.
+`std::sync`, `tokio::sync`, `tokio::task::spawn_local` (task.rs only),
+mlua in task.rs, ACP schema types in the four modules above. The scanner
+strips `//`, `///`, and `//!` comments before matching: `lib.rs`'s module
+docs mention `mlua::Error` and `agent_client_protocol` in prose, and doc
+text is not an import.
 
 Rationale over alternatives: `cargo modules`/`cargo-deps` add toolchain
 deps to the offline sandbox and break on nightly pins; nightly lints
@@ -78,6 +81,49 @@ at apply time from clippy's current warnings on the workspace) and
 records any deliberate non-adoption. `unused_crate_dependencies` gets a
 one-shot trial on the pin; adopted only if warning-free and offline-clean.
 
+**Apply-time amendment (2.2): `unused_crate_dependencies` not adopted.**
+The one-shot trial fired 273 warnings, all structural: the lint checks
+per-*target* while `[dependencies]` are per-*package*, so every bin and
+integration test that doesn't name every package dep fires (`deps_guard`
+doesn't use `tokio`; `mock-agent` doesn't use `ponos_check`; …), and it
+flags deps used only through `#[derive]` (`serde`). Adoption would
+require ~273 `use x as _;` sprinkles — the `#[allow]`-class churn this
+change forbids. Dropped; clippy stays green without it. (Dependency
+hygiene at crate level remains the compiler's and crane's job.)
+
+**Apply-time amendment (2.1).** Baseline inventory on the pin
+(`--all-targets`): one default-on warning (`needless_borrows_for_generic_args`
+in `tests/e2e.rs`) and otherwise clean. Adopted set: rustc
+`unsafe_op_in_unsafe_fn`, `rust_2018_idioms`, `elided_lifetimes_in_paths`,
+`missing_abi` (all fire zero times — floor documentation, not churn), plus
+the mechanical clippy set `redundant_clone`, `assigning_clones`,
+`map_unwrap_or`, `redundant_closure_for_method_calls`,
+`semicolon_if_nothing_returned`, `uninlined_format_args`,
+`unnecessary_join`, `unnecessary_debug_formatting`, `enum_glob_use`,
+`needless_continue`, `if_not_else`, `bool_to_int_with_if` — ~45 fixups,
+applied via `cargo clippy --fix` plus 5 hand edits (three `clone_from`
+swaps in mock-agent, one dead `continue` in ponos-result, the guard
+test's own panic formatting). Deliberate non-adoptions, with reasons:
+
+- `clippy::unwrap_used` (256 fires) / `expect_used` (109) /
+  `indexing_slicing` (114): not a mechanical pass — Cargo `[lints]`
+  cannot scope to non-test code, so adoption would demand ~300 site
+  rewrites (behavior risk) or `#[allow]` sprinkling; both breach this
+  change's constraints. The D1 guard test covers the invariant these
+  were a proxy for where it matters (I/O discipline).
+- `clippy::pedantic` as a group: fires ~250 across docs lints
+  (`missing_errors_doc` 34, `missing_panics_doc` 24, `must_use_candidate`
+  48) and case-by-case judgment lints (`cast_*`, `too_many_lines`,
+  `single_match_else`, …) — public-API docs ceremony is an explicit
+  non-goal and the rest is not mechanical. Individual mechanical
+  members were cherry-picked instead (see adopted set).
+- `clippy::doc_markdown` (7): docs churn outside this change's docs
+  mandate (paths only, no content rewrite).
+
+Gate held: `cargo clippy --workspace --all-targets -- -D warnings` green
+(stricter than the pinned `--workspace` form), zero new `#[allow]`
+attributes, `cargo fmt --check` clean, full `cargo test` green.
+
 ### D3 — Docs: AGENTS.md architecture section rewritten around the workspace
 
 Replace the current per-directory `src/…` map with: the composition root
@@ -86,17 +132,32 @@ line each (acp, render, check, luau, config, result), `ponos-core` with
 the four funded ports and the **closed-set rule** (new ports require
 their own change), and the TUI-readiness note (structured
 `SessionEvent`s + `EventSink`/`InteractionPolicy` ports exist so a TUI
-is an adapter away — no current plan). README: fix stale paths
-(`src/bin/mock-agent/` and any other `src/` references) to `crates/…`;
-no content rewrite.
+is an adapter away — no current plan). Stale paths elsewhere in AGENTS.md
+(the Testing section's `src/bin/mock-agent/`) are refreshed in the same
+pass. README and `skills/ponos/SKILL.md`: fix stale paths
+(`src/bin/mock-agent/` and any other root-relative `src/` references that
+point into the repo tree) to `crates/…`; no content rewrite. Illustrative
+output stays byte-identical — the README "Output format" sample block is
+reproduced line-for-line by `crates/ponos-cli/tests/cli.rs`, and
+SKILL.md's code-sample payload strings are fictional, not repo pointers.
 
-### D4 — Straggler hunt with the facade carve-out
+### D4 — Straggler hunt with the facade carve-outs
 
 `git grep` for dead paths from ①/② moves (`src/config.rs`, `src/task.rs`,
 `crate::result_wire`, pre-split module paths) in code and docs; delete
-dead modules. The `ponos` facade's flat `pub use` list and the
-`config`/`task` compat re-exports are **kept** — tests exercise the
-system through them (settled Q4).
+dead modules. Two deliberate carve-outs:
+
+1. The `ponos` facade's flat `pub use` list and the `config`/`task`
+   compat re-exports are **kept** — tests exercise the system through
+   them (settled Q4). Correspondingly, `crate::render`/`crate::check`/…
+   inside `crates/ponos-cli` are live composition-root usage of that
+   facade, not stragglers; the straggler grep excludes the crate.
+2. `examples/` payload strings (`"src/main.rs"` &co. in
+   `sequential_review.luau` and `workflow-1/main.luau`) stay
+   byte-identical: fictional review targets in the test-pinned corpus —
+   ② kept `examples/` byte-identical and no test asserts on the strings.
+   ②'s task 3.3 deferred them to ③'s scope; this change resolves that
+   handoff as won't-fix, recorded here rather than silently dropped.
 
 ## Risks / Trade-offs
 

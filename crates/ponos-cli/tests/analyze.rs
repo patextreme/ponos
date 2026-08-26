@@ -86,8 +86,7 @@ fn luau_lsp_on_path() -> Option<PathBuf> {
     std::env::split_paths(&path).find_map(|dir| {
         let candidate = dir.join("luau-lsp");
         std::fs::metadata(&candidate)
-            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
             .then_some(candidate)
     })
 }

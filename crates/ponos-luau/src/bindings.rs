@@ -26,7 +26,7 @@ use super::state::runtime_state;
 
 fn new_task_obj(lua: &Lua, state: Rc<TaskState>) -> mlua::Result<Table> {
     let t = lua.create_table()?;
-    let s = state.clone();
+    let s = state;
     t.set(
         "await",
         lua.create_async_function(move |_lua, _self: Table| {
@@ -153,7 +153,7 @@ fn new_session_obj(lua: &Lua, handle: SessionHandle) -> mlua::Result<Table> {
         })?,
     )?;
 
-    let close_handle = handle.clone();
+    let close_handle = handle;
     t.set(
         "close",
         lua.create_async_function(move |lua, _self: Table| {
@@ -257,7 +257,7 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                 let n = counter.get() + 1;
                 counter.set(n);
                 let id = id.unwrap_or_else(|| format!("s{n}"));
-                let label = format!("{}/{}", name, id);
+                let label = format!("{name}/{id}");
 
                 let cwd: Option<String> = opts.get("cwd")?;
                 let cwd = match cwd {

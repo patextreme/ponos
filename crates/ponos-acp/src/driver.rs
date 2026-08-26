@@ -657,7 +657,7 @@ fn format_changed(changed: &[(String, String)]) -> String {
 
 /// Map a protocol plan status to the protocol-agnostic event status.
 fn plan_status(status: &agent_client_protocol::schema::v1::PlanEntryStatus) -> PlanStatus {
-    use agent_client_protocol::schema::v1::PlanEntryStatus::*;
+    use agent_client_protocol::schema::v1::PlanEntryStatus::{Completed, InProgress, Pending};
     match status {
         Pending => PlanStatus::Pending,
         InProgress => PlanStatus::InProgress,
@@ -717,7 +717,7 @@ mod tests {
         assert!(changed.is_empty(), "{changed:?}");
 
         // New value (and a previously unseen id): both reported.
-        let mut updated = options.clone();
+        let mut updated = options;
         updated[0] = SessionConfigOption::select(
             "model",
             "Model",

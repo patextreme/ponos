@@ -47,8 +47,7 @@ pub fn setup_lua(cfg: &RunConfig) -> mlua::Result<Lua> {
     let entry = std::fs::canonicalize(&cfg.script_path).unwrap_or_else(|_| cfg.script_path.clone());
     let script_root = entry
         .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
     let require_fn = lua.create_require_function(ScriptRequirer::new(script_root))?;
     globals.set("require", require_fn)?;
 

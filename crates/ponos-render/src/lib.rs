@@ -196,7 +196,7 @@ impl Renderer {
             DisplayEvent::Tool(body) => self.line(label, &body),
             DisplayEvent::Plan(summary) => self.line(label, &summary),
             DisplayEvent::Usage { used, size } => {
-                self.line(label, &format!("context: {used}/{size} tokens"))
+                self.line(label, &format!("context: {used}/{size} tokens"));
             }
         }
     }
@@ -279,15 +279,15 @@ impl EventSink for Renderer {
     fn emit(&self, label: &str, event: SessionEvent) {
         match event {
             SessionEvent::Prompt { text } => {
-                self.line(label, &format!("prompt: {}", prompt_preview(&text)))
+                self.line(label, &format!("prompt: {}", prompt_preview(&text)));
             }
             SessionEvent::TextDelta { delta, .. } => self.event(label, DisplayEvent::Chunk(delta)),
             SessionEvent::ToolLine(line) => self.event(label, DisplayEvent::Tool(line.body)),
             SessionEvent::Plan { entries } => {
-                self.event(label, DisplayEvent::Plan(plan_summary(&entries)))
+                self.event(label, DisplayEvent::Plan(plan_summary(&entries)));
             }
             SessionEvent::Usage { used, size } => {
-                self.event(label, DisplayEvent::Usage { used, size })
+                self.event(label, DisplayEvent::Usage { used, size });
             }
             SessionEvent::StderrLine { line } => self.agent_stderr(label, &line),
             SessionEvent::Lifecycle { message } => self.lifecycle(&message),
@@ -304,7 +304,7 @@ impl EventSink for Renderer {
     }
 
     fn script_log(&self, message: &str) {
-        self.script_log(message)
+        self.script_log(message);
     }
 }
 

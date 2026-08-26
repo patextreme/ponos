@@ -11,10 +11,11 @@ and `src/config.rs`, which no longer exist. This change closes the
 sequence: enforcement that cannot drift, and docs that match the landed
 crate map. Zero behavior change.
 
-**Dependency:** blocked on ② landing and being archived. Artifacts here
-are written against ②'s design D1–D4 (crate map, facade, workspace
-mechanics); if ②'s apply records deviations, reconcile this change's
-design/tasks before applying it.
+**Dependency:** ② has landed and is archived
+(`2026-08-26-hexagonal-workspace-split`). Artifacts here are written
+against ②'s design D1–D4 (crate map, facade, workspace mechanics);
+task 0.1 reconciles this change's design/tasks against ②'s recorded
+apply-time deviations before any code is touched.
 
 ## What Changes
 
@@ -33,11 +34,15 @@ design/tasks before applying it.
 - **Docs**: rewrite AGENTS.md's architecture section around the crate
   map (composition root + facade, adapters, core, the four funded ports
   and the closed-set rule — new ports require their own change; TUI
-  readiness rationale with the event types); refresh stale paths in
-  README (e.g. `src/bin/mock-agent/` → `crates/ponos-cli/src/bin/mock-agent/`).
+  readiness rationale with the event types) and refresh stale paths
+  elsewhere in AGENTS.md; refresh stale paths in README and
+  `skills/ponos/SKILL.md` (e.g. `src/bin/mock-agent/` →
+  `crates/ponos-cli/src/bin/mock-agent/`).
 - **Straggler hygiene**: sweep for stale paths/dead modules left by ①/②
   moves — explicitly **not** the `ponos` facade in `ponos-cli`, which is
-  load-bearing API.
+  load-bearing API, and **not** the `examples/` payload path strings,
+  which are fictional review targets in the test-pinned corpus (design
+  D4 records both carve-outs).
 
 ## Capabilities
 
@@ -56,6 +61,6 @@ exit codes, or output bytes change. `skip_specs: true` is set in
 - **Code**: one new test file in `crates/ponos-core/tests/`; lint
   attribute edits in workspace/member manifests (may surface fixups in
   member crates where new lints fire).
-- **Docs**: `AGENTS.md`, `README.md`.
+- **Docs**: `AGENTS.md`, `README.md`, `skills/ponos/SKILL.md`.
 - **Preceded by**: ① `hexagonal-internal-restructure` (archived),
-  ② `hexagonal-workspace-split` (proposed; must land first).
+  ② `hexagonal-workspace-split` (archived 2026-08-26).

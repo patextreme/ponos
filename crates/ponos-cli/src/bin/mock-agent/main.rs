@@ -346,8 +346,7 @@ fn prompt_text(req: &PromptRequest) -> String {
             ContentBlock::Text(t) => Some(t.text.clone()),
             _ => None,
         })
-        .collect::<Vec<_>>()
-        .join("")
+        .collect::<String>()
 }
 
 /// Spawn and handshake the stdio servers suggested in `session/new`.
@@ -399,7 +398,7 @@ async fn start_mcp_servers(
                 Arc::new(tokio::sync::Mutex::new(client)),
             )),
             Ok(Err(e)) => {
-                eprintln!("mock-agent: MCP handshake with {} failed: {e}", stdio.name)
+                eprintln!("mock-agent: MCP handshake with {} failed: {e}", stdio.name);
             }
             Err(_) => eprintln!("mock-agent: MCP handshake with {} timed out", stdio.name),
         }
@@ -412,8 +411,7 @@ fn result_text(result: &CallToolResult) -> String {
         .content
         .iter()
         .filter_map(|c| c.as_text().map(|t| t.text.clone()))
-        .collect::<Vec<_>>()
-        .join("")
+        .collect::<String>()
 }
 
 /// Call `result_submit` on the `ponos` server with `value`.
@@ -474,8 +472,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         let options: Vec<SessionConfigOption> = serde_json::from_str(&raw)
                             .expect("MOCK_CONFIG_OPTIONS must be a JSON array of config options");
-                        *config.options.lock().unwrap() = options.clone();
-                        *config.defaults.lock().unwrap() = options.clone();
+                        config.options.lock().unwrap().clone_from(&options);
+                        config.defaults.lock().unwrap().clone_from(&options);
                         response = response.config_options(options);
                     }
                     responder.respond(response)
@@ -927,11 +925,10 @@ async fn run_prompt(
         .ok()
         .filter(|r| !r.is_empty())
         .and_then(|raw| {
-            serde_json::from_str::<Vec<SessionConfigOption>>(&raw)
-                .map(Some)
-                .unwrap_or_else(|e| {
-                    panic!("MOCK_CONFIG_UPDATE must be a JSON array of config options: {e}")
-                })
+            serde_json::from_str::<Vec<SessionConfigOption>>(&raw).map_or_else(
+                |e| panic!("MOCK_CONFIG_UPDATE must be a JSON array of config options: {e}"),
+                Some,
+            )
         });
 
     let chunks: Vec<String> = match std::env::var("MOCK_ENV_DUMP") {
@@ -970,7 +967,10 @@ async fn run_prompt(
             vec![config.echo_value(&id)]
         }
         Err(_) => match std::env::var("MOCK_CHUNKS") {
-            Ok(spec) => spec.split('|').map(|s| s.to_string()).collect(),
+            Ok(spec) => spec
+                .split('|')
+                .map(std::string::ToString::to_string)
+                .collect(),
             Err(_) => vec![text],
         },
     };
@@ -1015,7 +1015,7 @@ async fn run_prompt(
     if let Some(options) = config_update {
         let n = config.prompts.fetch_add(1, Ordering::SeqCst) + 1;
         if n == 1 {
-            *config.options.lock().unwrap() = options.clone();
+            config.options.lock().unwrap().clone_from(&options);
             cx.send_notification(SessionNotification::new(
                 session_id.clone(),
                 SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
