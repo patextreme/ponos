@@ -1,12 +1,11 @@
 --!strict
 
-local pr_review_loop = require("../pr-review-loop")
 local cfg = require("./../utils/config")
+local predicateAgent = require("./../utils/predicate")
 
+-- compile-time constants first
 const PR_URL = "https://github.com/patextreme/ponos/pull/3"
 const MAX_ITERATIONS = 15
-
-local predicateAgent = require("./../utils/predicate")
 
 local pi: Agent = ponos.agent("pi")
 

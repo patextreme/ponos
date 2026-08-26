@@ -1,7 +1,6 @@
 --!strict
 
 local cfg = require("./../utils/config")
-
 local predicateAgent = require("./../utils/predicate")
 
 local pi: Agent = ponos.agent("pi")
