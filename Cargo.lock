@@ -1596,18 +1596,44 @@ dependencies = [
 ]
 
 [[package]]
-name = "ponos"
+name = "ponos-acp"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "async-process",
- "clap",
- "full_moon",
  "futures",
- "jiff",
- "jsonschema",
+ "libc",
+ "ponos-core",
+ "ponos-result",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "ponos-check"
+version = "0.1.0"
+dependencies = [
+ "full_moon",
+ "mlua",
+ "ponos-core",
+]
+
+[[package]]
+name = "ponos-cli"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "clap",
+ "futures",
  "libc",
  "mlua",
+ "ponos-acp",
+ "ponos-check",
+ "ponos-config",
+ "ponos-core",
+ "ponos-luau",
+ "ponos-render",
+ "ponos-result",
  "rmcp",
  "serde",
  "serde_json",
@@ -1616,6 +1642,59 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ponos-config"
+version = "0.1.0"
+dependencies = [
+ "ponos-core",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "ponos-core"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "jsonschema",
+ "mlua",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ponos-luau"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "futures",
+ "mlua",
+ "ponos-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ponos-render"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "ponos-core",
+]
+
+[[package]]
+name = "ponos-result"
+version = "0.1.0"
+dependencies = [
+ "ponos-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

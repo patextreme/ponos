@@ -15,7 +15,7 @@
 
     commonArgs = {
       pname = "ponos";
-      version = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).package.version;
+      version = (builtins.fromTOML (builtins.readFile ../crates/ponos-cli/Cargo.toml)).package.version;
       CARGO_BUILD_RUSTFLAGS = "-C debuginfo=0";
     };
 
@@ -90,7 +90,7 @@
         runHook preCheck
         luau-lsp analyze --platform=standard \
           --definitions=.ponos/ponos.d.luau \
-          examples/*.luau tests/fixtures/*.luau
+          examples/*.luau examples/*/*.luau crates/ponos-cli/tests/fixtures/*.luau
         runHook postCheck
       '';
 

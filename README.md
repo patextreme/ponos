@@ -268,10 +268,14 @@ write a nil-check retry loop, as above.
 Scripts run in a sandboxed Luau environment: `string`, `table`, `math`,
 `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, and `print` — no file I/O,
 subprocesses, network, or debug facilities. `require` resolves `.luau`
-modules relative to the requiring file and rejects paths escaping the script
-tree. (One deviation: a restricted `coroutine` table containing only `yield`
-remains visible because the embedded async runtime needs it; the scheduling
-primitives are absent.)
+modules relative to the requiring file with no directory boundary
+(`require("../shared/helper")` reaches sibling trees); non-relative require
+strings (absolute paths, bare module names, aliases) are rejected. Scripts
+are trusted code — they drive agents with your full authority, and the
+sandbox limits the blast radius of bugs, not malice. (One deviation: a
+restricted `coroutine` table containing only `yield` remains visible
+because the embedded async runtime needs it; the scheduling primitives
+are absent.)
 
 ### Per-session config (models and more)
 
@@ -362,7 +366,7 @@ followed by a summary line (`--no-color` drops the ANSI coloring):
    reachable through literal `require("...")` string arguments:
    unknown literal `ponos.agent("name")` names against the discovered
    registry; literal require targets that don't resolve under ponos's
-   rules (`.luau`/`.lua`/`init.luau`, script-tree escape guard); and a
+   rules (`.luau`/`.lua`/`init.luau`, relative to the requiring file); and a
    missing leading `--!strict` directive in the entry or any reachable
    file. Computed require paths, computed agent names, and inline agent
    spec tables are not linted — only literal strings.
@@ -442,17 +446,17 @@ Known residuals of the definitions (none affect execution):
   by current luau-lsp (a table-literal excess-key limitation) — invented
   *outcome* fields (`r.txt`) are flagged, double-check option names by
   hand; a `config` key is the removed constructor option and is rejected
-  at runtime, pre-spawn;
-- the require-tree restriction (no paths escaping the script directory) is
-  not enforced by editor analysis (luau-lsp resolves requires without
-  ponos's escape-guard); the runtime enforces it at require time and
-  `ponos check` enforces it statically before any run.
+  at runtime, pre-spawn.
+
+Relative requires carry no residual: luau-lsp and ponos resolve them
+identically — from the requiring file, with no directory boundary.
 
 ## Examples
 
 See [`examples/`](examples/) — sequential review, fan-out with a concurrency
-cap, per-session model fan-out, a watchdog cancel, and typed results with a
-retry loop — and run them against the bundled mock agent:
+cap, per-session model fan-out, a watchdog cancel, typed results with a
+retry loop, and two sibling workflows sharing a helper through a
+cross-tree require — and run them against the bundled mock agent:
 
 ```sh
 mkdir -p .ponos
@@ -466,7 +470,7 @@ ponos run examples/sequential_review.luau
 
 ## Development
 
-- `src/bin/mock-agent/` — a scriptable ACP agent (with an MCP client for
+- `crates/ponos-cli/src/bin/mock-agent/` — a scriptable ACP agent (with an MCP client for
   suggested servers) used by the offline test suite (`MOCK_CHUNKS`,
   `MOCK_HANG`, `MOCK_PERMISSION` (`once`/`always`/`reject`), `MOCK_TOOL`,
   `MOCK_TOOL_FLOW` (status-sequence replay), `MOCK_PLAN`, `MOCK_USAGE`,

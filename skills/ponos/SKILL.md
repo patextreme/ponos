@@ -18,9 +18,10 @@ owns its own agent subprocess; closing a session reaps the process.
     verbatim in the binary; the single source of truth for shapes.
   - `examples/*.luau` — vetted scripts (sequential, fan-out, model
     fan-out, watchdog, typed results).
-  - `src/script/` (Luau runtime + sandbox), `src/acp/` (ACP client),
-    `src/check*` (`check` pipeline), `src/bin/mock-agent/` (scriptable
-    test agent used by the offline test suite).
+  - `crates/ponos-luau/` (Luau runtime + sandbox), `crates/ponos-acp/`
+    (ACP client), `crates/ponos-check/` (`check` pipeline),
+    `crates/ponos-cli/src/bin/mock-agent/` (scriptable test agent used
+    by the offline test suite).
 - `ponos types` prints the type definitions matching the *installed*
   binary — no registry or agents needed. `ponos --version` confirms the
   binary exists.
@@ -62,9 +63,13 @@ orchestration logic belongs in the script; anything touching the machine
 belongs in the *agent's* prompt or the agent registry.
 
 `require` resolves `.luau` modules relative to the requiring file
-(`foo.luau`, `foo.lua`, `foo/init.luau`, `foo/init.lua`) and rejects
-paths escaping the script tree. `--!strict` is enforced by `ponos check`
-on the entry and every reachable file.
+(`foo.luau`, `foo.lua`, `foo/init.luau`, `foo/init.lua`) with no directory
+boundary — `require("../shared/helper")` reaches sibling trees — and
+rejects non-relative require strings (absolute paths, bare module names,
+aliases). Scripts are trusted code: they drive agents with the user's full
+authority, and the sandbox limits the blast radius of bugs, not malice.
+`--!strict` is enforced by `ponos check` on the entry and every reachable
+file.
 
 ## API reference
 

@@ -33,10 +33,10 @@ The check SHALL compile the entry script in-process; a compilation failure is re
 - **THEN** checking proceeds to the static lint pass
 
 ### Requirement: Static lints walk the literal require graph
-The check SHALL statically analyze the entry and every file reachable through literal string `require("...")` call arguments, resolving each path relative to its requiring file under ponos's module-resolution rules, without executing anything. It SHALL report:
+The check SHALL statically analyze the entry and every file reachable through literal string `require("...")` call arguments, resolving each path relative to its requiring file under ponos's module-resolution rules (no boundary: requires may traverse out of the entry script's directory), without executing anything. It SHALL report:
 
 - **Unknown agent names**: a literal `ponos.agent("<name>")` string argument that resolves in no discovered registry (project `.ponos/config.toml` found upward from the invocation directory overriding the user config per agent name, exactly as `run` discovers) is a finding. Non-literal (computed) arguments and inline spec tables SHALL NOT be linted.
-- **Broken requires**: a literal require target that does not resolve to an existing module file (`.luau`, `.lua`, `init.luau`, `init.lua`) or that escapes the script tree is a finding.
+- **Broken requires**: a literal require target that does not resolve to an existing module file (`.luau`, `.lua`, `init.luau`, `init.lua`) is a finding. A require whose target exists outside the entry script's directory is NOT a finding.
 - **Missing strict directive**: the entry and every reachable file SHALL begin with a `--!strict` directive; a file without it is a finding.
 
 #### Scenario: Unknown literal agent name
@@ -47,9 +47,9 @@ The check SHALL statically analyze the entry and every file reachable through li
 - **WHEN** a reachable file contains `ponos.agent(name)` where `name` is a variable
 - **THEN** the check reports no finding for that call
 
-#### Scenario: Require escaping the script tree
-- **WHEN** a reachable file contains `require("../../outside")`
-- **THEN** the check reports a finding that the path escapes the script directory
+#### Scenario: Require outside the entry tree is not a finding
+- **WHEN** a reachable file contains `require("../../outside")` and the target resolves to an existing module file outside the entry script's directory
+- **THEN** the check reports no finding for that require
 
 #### Scenario: Missing module
 - **WHEN** a reachable file contains `require("./lib/nope")` and no such module file exists

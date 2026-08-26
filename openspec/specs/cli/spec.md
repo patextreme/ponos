@@ -22,7 +22,7 @@ The `ponos` CLI SHALL provide `ponos run <script.luau>`, where `<script.luau>` i
 - **THEN** the CLI prints an error naming the path and exits non-zero
 
 ### Requirement: Run pre-flight fails certain-broken scripts before spawning
-`ponos run` SHALL perform an in-process pre-flight before executing the script: compile/parse the entry and every file reachable through literal `require("...")` string arguments, resolve literal require targets under ponos's module-resolution rules (existence and script-tree escape guard), and resolve literal `ponos.agent("<name>")` string arguments against the discovered registry. A pre-flight failure SHALL fail the run before any agent subprocess spawns, with the finding(s) printed to standard error and exit code 1.
+`ponos run` SHALL perform an in-process pre-flight before executing the script: compile/parse the entry and every file reachable through literal `require("...")` string arguments, resolve literal require targets under ponos's module-resolution rules (existence; no boundary — requires may traverse out of the entry script's directory), and resolve literal `ponos.agent("<name>")` string arguments against the discovered registry. A pre-flight failure SHALL fail the run before any agent subprocess spawns, with the finding(s) printed to standard error and exit code 1.
 
 The pre-flight SHALL NOT execute script code, SHALL NOT enforce the `--!strict` directive, and SHALL NOT invoke `luau-lsp`. Non-literal (computed) require paths and agent names SHALL NOT be pre-flighted — a script using them runs exactly as before.
 
@@ -33,6 +33,10 @@ The pre-flight SHALL NOT execute script code, SHALL NOT enforce the `--!strict` 
 #### Scenario: Broken literal require fails fast
 - **WHEN** a script contains `require("./lib/missing")` and no such module file exists
 - **THEN** the run fails immediately with a finding naming the unresolved path, before any agent spawns
+
+#### Scenario: Cross-tree require passes pre-flight
+- **WHEN** a script contains `require("../shared/util")` and the module exists outside the entry script's directory
+- **THEN** the pre-flight resolves it without findings and the run proceeds
 
 #### Scenario: Non-strict scripts still run
 - **WHEN** a script without a `--!strict` directive is run
@@ -58,11 +62,11 @@ The CLI SHALL accept output flags: `--quiet` suppresses all streaming render and
 - **THEN** session output is still attributed by its text prefix but contains no ANSI escape sequences
 
 ### Requirement: Rendered lines are timestamped
-Every rendered output line — agent message chunks, tool lines, plan summaries, context-usage lines, lifecycle diagnostics, `ponos.log` lines, and `-vv` agent stderr passthrough — SHALL be prefixed with a wall-clock local-time timestamp in 24-hour `HH:MM:SS` form, ahead of the session attribution prefix. Timestamps SHALL be always on: no flag controls them. `--no-color` SHALL keep the timestamp as plain text, and `--quiet` SHALL continue to suppress all rendered output. Script `print` output does not pass through the renderer and SHALL NOT be timestamped or otherwise modified.
+Every rendered output line — agent message chunks, tool lines, plan summaries, context-usage lines, lifecycle diagnostics, `ponos.log` lines, and `-vv` agent stderr passthrough — SHALL be prefixed with a local-time timestamp shaped `yyyy-mm-dd HH:MM:SS` (space-separated), per the `render-logging` capability's timestamp contract, ahead of the session attribution prefix. Timestamps SHALL be always on: no flag controls them. `--no-color` SHALL keep the timestamp as plain text, and `--quiet` SHALL continue to suppress all rendered output. Script `print` output does not pass through the renderer and SHALL NOT be timestamped or otherwise modified.
 
 #### Scenario: Timestamp on rendered lines
 - **WHEN** any rendered line is emitted (message chunk, tool line, plan, usage, lifecycle diagnostic, `ponos.log`, or agent stderr passthrough)
-- **THEN** the line begins with an `HH:MM:SS` local-time timestamp
+- **THEN** the line begins with a `yyyy-mm-dd HH:MM:SS` local-time timestamp
 
 #### Scenario: No-color keeps plain timestamps
 - **WHEN** a script runs with `--no-color`
