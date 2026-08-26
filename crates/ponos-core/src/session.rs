@@ -111,8 +111,9 @@ pub struct SessionOptions {
     /// Attribution label, e.g. `claude/s1`.
     pub label: String,
     /// Typed result contract. When set, ponos injects the result-bridge
-    /// MCP server into the session and appends the submit instruction to
-    /// every prompt.
+    /// MCP server into the session. Prompt text is passed through
+    /// verbatim; submit guidance lives in the `result_submit` tool
+    /// description.
     pub result: Option<ResultContract>,
 }
 
