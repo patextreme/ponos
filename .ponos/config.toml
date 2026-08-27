@@ -1,6 +1,7 @@
 [agents.pi]
 command = "pi-acp"
 args = [ ]
+env = { PI_NO_BELL = "1" }
 
 [agents.opencode]
 command = "opencode"
