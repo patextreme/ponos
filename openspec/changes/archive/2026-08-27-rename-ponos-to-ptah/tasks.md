@@ -16,7 +16,7 @@
 ## 4. Non-string surface fixes (design D3)
 
 - [x] 4.1 Fix `crates/ptah-check/src/defs.rs` `include_str!` path to `../../../.ptah/ptah.d.luau`; verify a `ptah check` invocation against a bundled example in a test passes (definitions found and parsed)
-- [ ] 4.2 Update Nix: `pname = "ptah"` (package.nix), checks attrs `ptah-tests`/`ptah-smoke`/`ptah-analyze`, `packages.ptah`, `meta.mainProgram`, `source.nix` `ponosSrc` → `ptahSrc` and the `/.ponos` → `/.ptah` filter suffix rules, flake description; verify `nix flake check` passes in full
+- [x] 4.2 Update Nix: `pname = "ptah"` (package.nix), checks attrs `ptah-tests`/`ptah-smoke`/`ptah-analyze`, `packages.ptah`, `meta.mainProgram`, `source.nix` `ponosSrc` → `ptahSrc` and the `/.ponos` → `/.ptah` filter suffix rules, flake description; verify `nix flake check` passes in full
 - [x] 4.3 Update `deps_guard.rs` crate-name pins to `ptah_acp`/`ptah_luau`/… ; verify `cargo test -p ptah-core --test deps_guard` passes
 - [x] 4.4 Rename render identifiers `ponos_line`/`ponos-line` → `ptah_line` and the rendered `[ponos]` prefix → `[ptah]`; verify an e2e test asserting the `[ptah]` diagnostic line passes
 - [x] 4.5 Update `.helix/languages.toml` definitions path to `.ptah/ptah.d.luau`; verify the referenced path exists
