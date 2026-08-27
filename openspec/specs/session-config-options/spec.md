@@ -7,14 +7,14 @@ Defines the per-session configuration surface exposed to scripts: discovery of a
 ## Requirements
 
 ### Requirement: Config option capability is advertised
-ponos SHALL advertise the `session.configOptions` client capability during `initialize` so capability-gating agents may include config options in their `session/new` responses, including its `boolean` sub-capability so agents may offer boolean options and accept boolean `set_config_option` values. No other client capability SHALL be declared.
+ptah SHALL advertise the `session.configOptions` client capability during `initialize` so capability-gating agents may include config options in their `session/new` responses, including its `boolean` sub-capability so agents may offer boolean options and accept boolean `set_config_option` values. No other client capability SHALL be declared.
 
 #### Scenario: Capability present in handshake
-- **WHEN** ponos performs the `initialize` handshake with an agent
+- **WHEN** ptah performs the `initialize` handshake with an agent
 - **THEN** the request's client capabilities include `session.configOptions` with its `boolean` sub-capability and no interactive capability
 
 ### Requirement: Option state is captured and kept live
-ponos SHALL capture the `configOptions` array from each `session/new` response as that session's initial option state, and SHALL update it from `config_option_update` notifications and `session/set_config_option` responses so the surfaced state never goes stale.
+ptah SHALL capture the `configOptions` array from each `session/new` response as that session's initial option state, and SHALL update it from `config_option_update` notifications and `session/set_config_option` responses so the surfaced state never goes stale.
 
 #### Scenario: Options captured at session start
 - **WHEN** a session is created on an agent that returns config options

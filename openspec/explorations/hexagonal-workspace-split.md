@@ -19,11 +19,11 @@ change; `tests/` stay byte-identical and green.
 ## Settled decisions (from the design session — do not relitigate)
 
 - **Private workspace members.** No publishing, no semver/docs ceremony; the
-  `ponos` binary is the only artifact that matters. Tighten later if embedding
+  `ptah` binary is the only artifact that matters. Tighten later if embedding
   by third parties ever matters.
-- **Both binaries (`ponos`, `mock-agent`) live in the `ponos-cli` package** so
+- **Both binaries (`ptah`, `mock-agent`) live in the `ptah-cli` package** so
   `env!("CARGO_BIN_EXE_mock-agent")` keeps working and all 129 integration
-  tests stay byte-identical in `ponos-cli/tests/`. "Not part of the CLI
+  tests stay byte-identical in `ptah-cli/tests/`. "Not part of the CLI
   surface" is a behavioral contract, not a packaging one.
 - Luau host is a fixed fixture (no port), but still gets its own crate for
   dependency isolation.
@@ -32,14 +32,14 @@ change; `tests/` stay byte-identical and green.
 
 | Crate | Contents | Depends on |
 |---|---|---|
-| `ponos-core` | pure domain: turns/folds, task semantics, `ResultContract`, config model+interp, structured events, error types, **ports** (`AgentTransport`, `EventSink`, `ConfigSource`, `InteractionPolicy`) | std, serde, jsonschema |
-| `ponos-acp` | ACP-over-stdio adapter (process/proto/driver from ①) | core, agent-client-protocol, async-process |
-| `ponos-luau` | mlua sandbox, `ponos.*` bindings, require, task bridging | core, mlua |
-| `ponos-check` | check/preflight pipeline; `TYPE_DEFINITIONS`; luau-lsp shell-out | core, mlua, full-moon |
-| `ponos-config` | TOML/fs discovery — the only `ConfigSource` impl (317 lines today; collapsible into core's `config::fs` if it bothers anyone) | core |
-| `ponos-render` | terminal line renderer consuming structured events | core |
-| `ponos-result` | `result_wire.rs` — UDS channel + submit/verdict protocol, both halves (added in the design session: filing it under `ponos-cli` creates an `acp → cli → acp` cycle; folding into `ponos-acp` misplaces the protocol; splitting it duplicates the wire types) | core, tokio, serde, serde_json |
-| `ponos-cli` | composition root: clap, wiring, both binaries, bridge + result UDS channel, transport composition line (moved here from `script/state.rs`; `RunConfig` gains injected transport — the only test-surface edit: the mechanical `transport:` line at the two `RunConfig` literals in `tests/script.rs`/`tests/e2e.rs`) | everything |
+| `ptah-core` | pure domain: turns/folds, task semantics, `ResultContract`, config model+interp, structured events, error types, **ports** (`AgentTransport`, `EventSink`, `ConfigSource`, `InteractionPolicy`) | std, serde, jsonschema |
+| `ptah-acp` | ACP-over-stdio adapter (process/proto/driver from ①) | core, agent-client-protocol, async-process |
+| `ptah-luau` | mlua sandbox, `ptah.*` bindings, require, task bridging | core, mlua |
+| `ptah-check` | check/preflight pipeline; `TYPE_DEFINITIONS`; luau-lsp shell-out | core, mlua, full-moon |
+| `ptah-config` | TOML/fs discovery — the only `ConfigSource` impl (317 lines today; collapsible into core's `config::fs` if it bothers anyone) | core |
+| `ptah-render` | terminal line renderer consuming structured events | core |
+| `ptah-result` | `result_wire.rs` — UDS channel + submit/verdict protocol, both halves (added in the design session: filing it under `ptah-cli` creates an `acp → cli → acp` cycle; folding into `ptah-acp` misplaces the protocol; splitting it duplicates the wire types) | core, tokio, serde, serde_json |
+| `ptah-cli` | composition root: clap, wiring, both binaries, bridge + result UDS channel, transport composition line (moved here from `script/state.rs`; `RunConfig` gains injected transport — the only test-surface edit: the mechanical `transport:` line at the two `RunConfig` literals in `tests/script.rs`/`tests/e2e.rs`) | everything |
 
 Corrections to earlier drafts, verified against the landed ① tree:
 
@@ -47,16 +47,16 @@ Corrections to earlier drafts, verified against the landed ① tree:
   `config::fs`" is impossible — core is I/O-free by ①'s settled design.
   Kept as its own crate for adapter symmetry (fold-into-cli recorded as
   fallback in the change's design D1).
-- `ponos-core`'s dep column gains the data-level deps ① settled:
+- `ptah-core`'s dep column gains the data-level deps ① settled:
   mlua (`task`), agent-client-protocol schema types (`turn`, `session`,
   `ports`), tokio::sync.
-- The `ponos` lib name in `ponos-cli` is the **permanent facade**
+- The `ptah` lib name in `ptah-cli` is the **permanent facade**
   (flat `pub use` of member crates + core compat re-exports) — tests
-  exercise the system through `ponos::*`; it is not a shim for ③ to
+  exercise the system through `ptah::*`; it is not a shim for ③ to
   delete.
 - ①'s other two surviving arrows resolve as: `acp → result_wire` =
-  `acp → ponos-result` (legal), `bridge → result_wire` = `cli →
-  ponos-result` (legal). Only `script → acp` needed a design change.
+  `acp → ptah-result` (legal), `bridge → result_wire` = `cli →
+  ptah-result` (legal). Only `script → acp` needed a design change.
 
 ## Work items when picked up
 
@@ -65,7 +65,7 @@ Corrections to earlier drafts, verified against the landed ① tree:
 2. Workspace-level dependency/lint inheritance (`[workspace.dependencies]`).
 3. Nix/crane update: source filtering per crate; **keep `examples/` in the
    build source** so `tests/examples.rs` still passes in the sandbox.
-4. Both `[[bin]]`s (`ponos`, `mock-agent`) in `ponos-cli`; `tests/` moves with
+4. Both `[[bin]]`s (`ptah`, `mock-agent`) in `ptah-cli`; `tests/` moves with
    them untouched.
 5. Acceptance: `cargo test`, `cargo clippy -- -D warnings`,
    `nix flake check` green; `git diff tests/ examples/` empty.

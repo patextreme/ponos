@@ -30,7 +30,7 @@ Lets scripts declare a typed result contract per agent session and receive a val
 - **THEN** the session is created as a plain session: no contract, no injected tool, and prompt outcomes carry a `nil` `result` field
 
 ### Requirement: Submit tool injection
-When `result` is set, session creation SHALL offer the agent one additional MCP server over stdio, named `ponos`, exposing exactly one tool named `result_submit`. The tool's input schema SHALL be the declared schema wrapped under a single `value` property, so the declared schema reaches the model through the tool itself. The tool's description SHALL tell the agent to call it with its final result as `value` when its work is complete. Prompt text on a result session SHALL be passed through verbatim: ponos SHALL NOT append instructions to, or otherwise modify, the script's prompt. The schema SHALL NOT be inlined into prompt text. The injected server SHALL NOT change sessions that declare no `result`.
+When `result` is set, session creation SHALL offer the agent one additional MCP server over stdio, named `ptah`, exposing exactly one tool named `result_submit`. The tool's input schema SHALL be the declared schema wrapped under a single `value` property, so the declared schema reaches the model through the tool itself. The tool's description SHALL tell the agent to call it with its final result as `value` when its work is complete. Prompt text on a result session SHALL be passed through verbatim: ptah SHALL NOT append instructions to, or otherwise modify, the script's prompt. The schema SHALL NOT be inlined into prompt text. The injected server SHALL NOT change sessions that declare no `result`.
 
 #### Scenario: Tool appears with wrapped schema
 - **WHEN** a result session's agent lists tools from the injected server
@@ -42,7 +42,7 @@ When `result` is set, session creation SHALL offer the agent one additional MCP 
 
 #### Scenario: Prompt carries the instruction
 - **WHEN** a prompt is sent on a result session
-- **THEN** the text the agent receives is identical to the prompt text the script passed, carrying no ponos-appended instruction or suffix
+- **THEN** the text the agent receives is identical to the prompt text the script passed, carrying no ptah-appended instruction or suffix
 
 ### Requirement: Typed prompt outcomes
 The table returned by `session:prompt()` on a result session SHALL include a `result` field: the last accepted submission for that turn, converted from JSON to a Luau value (tables, strings, numbers, booleans; JSON `null` arrives as `nil`). `result` SHALL be `nil` when the agent completed the turn without any accepted submission.
@@ -89,7 +89,7 @@ Multiple result sessions SHALL operate independently: each session's schema, sub
 - **THEN** each outcome's `result` validates against its own session's schema only
 
 ### Requirement: Graceful degradation
-If the agent does not use the injected server — because it ignores the offered MCP servers, cannot access the ponos binary, or is sandboxed away from the transport — prompts SHALL still complete normally with `result` as `nil`, and ponos SHALL emit exactly one lifecycle diagnostic (a `[ponos]` line shown under `--verbose`) noting the session ran without typed results. Degradation SHALL NOT raise errors, hang turns, or change `text`/`stopReason`.
+If the agent does not use the injected server — because it ignores the offered MCP servers, cannot access the ptah binary, or is sandboxed away from the transport — prompts SHALL still complete normally with `result` as `nil`, and ptah SHALL emit exactly one lifecycle diagnostic (a `[ptah]` line shown under `--verbose`) noting the session ran without typed results. Degradation SHALL NOT raise errors, hang turns, or change `text`/`stopReason`.
 
 #### Scenario: Agent ignores injected servers
 - **WHEN** an agent completes a turn without ever connecting to the injected server
@@ -100,7 +100,7 @@ If the agent does not use the injected server — because it ignores the offered
 - **THEN** the prompt turn still reaches completion
 
 ### Requirement: Local-only result transport
-The channel between the injected server and ponos SHALL be a local Unix domain socket in a per-user temporary directory, created when the result session is created and removed when the session closes. The socket path SHALL NOT be guessable without access to the session's configuration, and the socket SHALL NOT accept connections after the session is closed.
+The channel between the injected server and ptah SHALL be a local Unix domain socket in a per-user temporary directory, created when the result session is created and removed when the session closes. The socket path SHALL NOT be guessable without access to the session's configuration, and the socket SHALL NOT accept connections after the session is closed.
 
 #### Scenario: Socket lifecycle
 - **WHEN** a result session is created and then closed

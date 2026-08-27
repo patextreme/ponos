@@ -7,7 +7,7 @@ Defines the Luau scripting environment embedded in ptah: the sandboxed standard 
 ## Requirements
 
 ### Requirement: Sandboxed Luau environment
-Scripts SHALL execute in a sandboxed Luau environment exposing only: `string`, `table`, `math`, `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, `print`, and a restricted `coroutine` table containing only `yield` (retained because the embedded async runtime requires it; all coroutine scheduling primitives MUST remain absent). The ambient environment MUST NOT expose file I/O, network, or debug facilities, and MUST NOT expose subprocess execution as a global (no `os.execute`, no `io`). Process execution reaches scripts only through the injected `ponos.exec` capability, specified by the `shell-exec` capability; scripts have no other host filesystem or network access beyond driving agents and `ponos.exec`.
+Scripts SHALL execute in a sandboxed Luau environment exposing only: `string`, `table`, `math`, `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, `print`, and a restricted `coroutine` table containing only `yield` (retained because the embedded async runtime requires it; all coroutine scheduling primitives MUST remain absent). The ambient environment MUST NOT expose file I/O, network, or debug facilities, and MUST NOT expose subprocess execution as a global (no `os.execute`, no `io`). Process execution reaches scripts only through the injected `ptah.exec` capability, specified by the `shell-exec` capability; scripts have no other host filesystem or network access beyond driving agents and `ptah.exec`.
 
 #### Scenario: Sandboxed globals
 - **WHEN** a script accesses `io`, `os.execute`, `debug`, or `coroutine.create`
@@ -15,7 +15,7 @@ Scripts SHALL execute in a sandboxed Luau environment exposing only: `string`, `
 
 #### Scenario: Print passthrough
 - **WHEN** a script calls `print("hello")`
-- **THEN** the line is written to ponos's standard output unmodified, without session prefixes
+- **THEN** the line is written to ptah's standard output unmodified, without session prefixes
 
 ### Requirement: Relative module resolution
 Scripts SHALL be able to `require` modules by relative path from the requiring file's directory (e.g. `require("./lib/pipeline")`, resolving `.luau` files). Relative paths resolve without a boundary: a require MAY traverse out of the entry script's directory (e.g. `require("../shared/helper")`) to any module reachable by relative path. Non-relative require strings (absolute paths, bare module names, aliases) MUST be rejected with a Lua error.
@@ -37,10 +37,10 @@ Scripts SHALL be able to `require` modules by relative path from the requiring f
 - **THEN** the require call raises a Lua error stating that only `./` and `../` paths are allowed
 
 ### Requirement: Agent and session API
-The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), `mcpServers`, and `resultSchema` (a JSON Schema expressed as a Luau table; the option's semantics are specified by the typed-results capability). Two `ponos.agent` calls for the same name SHALL return independent factory objects.
+The `ptah` namespace SHALL provide `ptah.agent(name_or_spec)` returning an agent factory, and `agent:session(options)` returning a session object. Each `session()` call creates an independent session with its own agent subprocess. Session options SHALL accept `cwd` (resolved relative to the invocation directory), `id` (label used in output attribution, defaulting to `s1`, `s2`, … per agent), `mcpServers`, and `resultSchema` (a JSON Schema expressed as a Luau table; the option's semantics are specified by the typed-results capability). Two `ptah.agent` calls for the same name SHALL return independent factory objects.
 
 #### Scenario: Session creation
-- **WHEN** a script calls `ponos.agent("claude"):session({ id = "reviewer" })`
+- **WHEN** a script calls `ptah.agent("claude"):session({ id = "reviewer" })`
 - **THEN** a session labeled `claude/reviewer` exists and is ready to prompt
 
 #### Scenario: Default session labels
@@ -48,11 +48,11 @@ The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an age
 - **THEN** they are labeled `s1` and `s2` respectively in output attribution
 
 #### Scenario: Independent factories
-- **WHEN** `ponos.agent("claude")` is called twice with the same name and each factory creates a session
+- **WHEN** `ptah.agent("claude")` is called twice with the same name and each factory creates a session
 - **THEN** the factories keep independent session counters: both first sessions are labeled `claude/s1`
 
 #### Scenario: Unknown agent name
-- **WHEN** `ponos.agent("nope")` is called and `nope` exists in no registry
+- **WHEN** `ptah.agent("nope")` is called and `nope` exists in no registry
 - **THEN** a Lua error is raised naming the unresolved agent
 
 ### Requirement: Prompt returns a result table
@@ -96,14 +96,14 @@ The `ponos` namespace SHALL provide `ponos.agent(name_or_spec)` returning an age
 - **THEN** task A's `prompt` returns a result with `stopReason == "cancelled"` and no error is raised
 
 ### Requirement: Task and concurrency primitives
-The `ponos` namespace SHALL provide: `ponos.spawn(fn)` returning a Task object with `:await()`, `ponos.join({task, ...})` waiting for all tasks, `ponos.parallel(items, fn, options?)` running `fn` per item with optional `concurrency` limit (default unlimited) and returning per-item outcome entries, and `ponos.sleep(ms)`. Awaiting an errored task SHALL re-raise its error at the await site. `ponos.parallel` results SHALL carry each item's success value or error without throwing wholesale. A task error is delivered when observed via `:await()`, `join`, or carried in `ponos.parallel` results, whether or not the script catches or inspects it; a task error never delivered by script end SHALL fail the run (error to stderr, non-zero exit).
+The `ptah` namespace SHALL provide: `ptah.spawn(fn)` returning a Task object with `:await()`, `ptah.join({task, ...})` waiting for all tasks, `ptah.parallel(items, fn, options?)` running `fn` per item with optional `concurrency` limit (default unlimited) and returning per-item outcome entries, and `ptah.sleep(ms)`. Awaiting an errored task SHALL re-raise its error at the await site. `ptah.parallel` results SHALL carry each item's success value or error without throwing wholesale. A task error is delivered when observed via `:await()`, `join`, or carried in `ptah.parallel` results, whether or not the script catches or inspects it; a task error never delivered by script end SHALL fail the run (error to stderr, non-zero exit).
 
 #### Scenario: Parallel fan-out
-- **WHEN** `ponos.parallel({1,2,3}, function(i) return agent:session():prompt("q"..i) end)` runs
+- **WHEN** `ptah.parallel({1,2,3}, function(i) return agent:session():prompt("q"..i) end)` runs
 - **THEN** all three turns execute concurrently, each on its own session, and results arrive in item order
 
 #### Scenario: Concurrency cap
-- **WHEN** `ponos.parallel(items, fn, { concurrency = 2 })` runs with 5 items
+- **WHEN** `ptah.parallel(items, fn, { concurrency = 2 })` runs with 5 items
 - **THEN** at most 2 `fn` invocations are in flight simultaneously
 
 #### Scenario: Contained task error
@@ -115,27 +115,27 @@ The `ponos` namespace SHALL provide: `ponos.spawn(fn)` returning a Task object w
 - **THEN** the original error is re-raised at the await call site
 
 ### Requirement: Runtime helpers
-The `ponos` namespace SHALL provide `ponos.log(msg)` printing a `[ponos]`-prefixed diagnostic line to standard output, `ponos.exit(code)` terminating the run, `ponos.sleep(ms)` yielding the current task for the duration, and `ponos.version` (read-only version string).
+The `ptah` namespace SHALL provide `ptah.log(msg)` printing a `[ptah]`-prefixed diagnostic line to standard output, `ptah.exit(code)` terminating the run, `ptah.sleep(ms)` yielding the current task for the duration, and `ptah.version` (read-only version string).
 
 #### Scenario: Log attribution
-- **WHEN** a script calls `ponos.log("starting")`
-- **THEN** output shows `[ponos] starting` on its own line
+- **WHEN** a script calls `ptah.log("starting")`
+- **THEN** output shows `[ptah] starting` on its own line
 
 #### Scenario: Sleep yields
-- **WHEN** task A calls `ponos.sleep(100)` while task B prompts
+- **WHEN** task A calls `ptah.sleep(100)` while task B prompts
 - **THEN** task B progresses during A's sleep
 
 ### Requirement: JSON module
-The `ponos` namespace SHALL provide `ponos.json.parse(string)` returning the decoded value as Luau data (arrays as tables with consecutive integer keys starting at 1, objects as string-keyed tables, `null` as `nil`), raising a Lua error on malformed input; and `ponos.json.stringify(value, { indent?: number })` returning the encoded JSON string. The module performs no I/O.
+The `ptah` namespace SHALL provide `ptah.json.parse(string)` returning the decoded value as Luau data (arrays as tables with consecutive integer keys starting at 1, objects as string-keyed tables, `null` as `nil`), raising a Lua error on malformed input; and `ptah.json.stringify(value, { indent?: number })` returning the encoded JSON string. The module performs no I/O.
 
 #### Scenario: Round trip
-- **WHEN** a script calls `ponos.json.parse('{"a":[1,2]}')` and stringifies the result with `ponos.json.stringify(v, { indent = 2 })`
+- **WHEN** a script calls `ptah.json.parse('{"a":[1,2]}')` and stringifies the result with `ptah.json.stringify(v, { indent = 2 })`
 - **THEN** the output is valid JSON encoding `{"a": [1, 2]}` with two-space indentation
 
 #### Scenario: Malformed input raises
-- **WHEN** a script calls `ponos.json.parse("{oops")`
+- **WHEN** a script calls `ptah.json.parse("{oops")`
 - **THEN** a Lua error is raised and can be caught with `pcall`
 
 #### Scenario: Decoding command output
-- **WHEN** a script calls `ponos.exec("printf '[{\\"n\\":1}]'")` and passes `r.stdout` to `ponos.json.parse`
+- **WHEN** a script calls `ptah.exec("printf '[{\\"n\\":1}]'")` and passes `r.stdout` to `ptah.json.parse`
 - **THEN** the result is a table whose first element is `{ n = 1 }`

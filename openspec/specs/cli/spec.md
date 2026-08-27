@@ -7,14 +7,14 @@ Defines the user-facing command surface of the ptah binary: how scripts are invo
 ## Requirements
 
 ### Requirement: Run subcommand executes a script
-The `ponos` CLI SHALL provide `ponos run <script.luau>`, where `<script.luau>` is a positional required path to the entry Luau script.
+The `ptah` CLI SHALL provide `ptah run <script.luau>`, where `<script.luau>` is a positional required path to the entry Luau script.
 
 #### Scenario: Successful run
-- **WHEN** `ponos run script.luau` is invoked and the script completes without uncaught errors
+- **WHEN** `ptah run script.luau` is invoked and the script completes without uncaught errors
 - **THEN** the process exits with code 0
 
 #### Scenario: Missing script argument
-- **WHEN** `ponos run` is invoked without a positional path
+- **WHEN** `ptah run` is invoked without a positional path
 - **THEN** the CLI prints a usage error and exits non-zero without executing anything
 
 #### Scenario: Nonexistent script file
@@ -22,12 +22,12 @@ The `ponos` CLI SHALL provide `ponos run <script.luau>`, where `<script.luau>` i
 - **THEN** the CLI prints an error naming the path and exits non-zero
 
 ### Requirement: Run pre-flight fails certain-broken scripts before spawning
-`ponos run` SHALL perform an in-process pre-flight before executing the script: compile/parse the entry and every file reachable through literal `require("...")` string arguments, resolve literal require targets under ponos's module-resolution rules (existence; no boundary — requires may traverse out of the entry script's directory), and resolve literal `ponos.agent("<name>")` string arguments against the discovered registry. A pre-flight failure SHALL fail the run before any agent subprocess spawns, with the finding(s) printed to standard error and exit code 1.
+`ptah run` SHALL perform an in-process pre-flight before executing the script: compile/parse the entry and every file reachable through literal `require("...")` string arguments, resolve literal require targets under ptah's module-resolution rules (existence; no boundary — requires may traverse out of the entry script's directory), and resolve literal `ptah.agent("<name>")` string arguments against the discovered registry. A pre-flight failure SHALL fail the run before any agent subprocess spawns, with the finding(s) printed to standard error and exit code 1.
 
 The pre-flight SHALL NOT execute script code, SHALL NOT enforce the `--!strict` directive, and SHALL NOT invoke `luau-lsp`. Non-literal (computed) require paths and agent names SHALL NOT be pre-flighted — a script using them runs exactly as before.
 
 #### Scenario: Unknown literal agent name fails fast
-- **WHEN** `ponos run script.luau` runs and the script contains `ponos.agent("clawed")` where no registry defines `clawed`
+- **WHEN** `ptah run script.luau` runs and the script contains `ptah.agent("clawed")` where no registry defines `clawed`
 - **THEN** the run fails before any agent subprocess spawns and exits 1
 
 #### Scenario: Broken literal require fails fast
@@ -43,7 +43,7 @@ The pre-flight SHALL NOT execute script code, SHALL NOT enforce the `--!strict` 
 - **THEN** the run proceeds exactly as before; the directive is not required for execution
 
 #### Scenario: Computed agent name is not pre-flighted
-- **WHEN** a script calls `ponos.agent(name)` with a variable
+- **WHEN** a script calls `ptah.agent(name)` with a variable
 - **THEN** the pre-flight makes no claim about it and the run proceeds
 
 #### Scenario: Unreachable missing require is accepted risk
@@ -62,10 +62,10 @@ The CLI SHALL accept output flags: `--quiet` suppresses all streaming render and
 - **THEN** session output is still attributed by its text prefix but contains no ANSI escape sequences
 
 ### Requirement: Rendered lines are timestamped
-Every rendered output line — agent message chunks, tool lines, plan summaries, context-usage lines, lifecycle diagnostics, `ponos.log` lines, and `-vv` agent stderr passthrough — SHALL be prefixed with a local-time timestamp shaped `yyyy-mm-dd HH:MM:SS` (space-separated), per the `render-logging` capability's timestamp contract, ahead of the session attribution prefix. Timestamps SHALL be always on: no flag controls them. `--no-color` SHALL keep the timestamp as plain text, and `--quiet` SHALL continue to suppress all rendered output. Script `print` output does not pass through the renderer and SHALL NOT be timestamped or otherwise modified.
+Every rendered output line — agent message chunks, tool lines, plan summaries, context-usage lines, lifecycle diagnostics, `ptah.log` lines, and `-vv` agent stderr passthrough — SHALL be prefixed with a local-time timestamp shaped `yyyy-mm-dd HH:MM:SS` (space-separated), per the `render-logging` capability's timestamp contract, ahead of the session attribution prefix. Timestamps SHALL be always on: no flag controls them. `--no-color` SHALL keep the timestamp as plain text, and `--quiet` SHALL continue to suppress all rendered output. Script `print` output does not pass through the renderer and SHALL NOT be timestamped or otherwise modified.
 
 #### Scenario: Timestamp on rendered lines
-- **WHEN** any rendered line is emitted (message chunk, tool line, plan, usage, lifecycle diagnostic, `ponos.log`, or agent stderr passthrough)
+- **WHEN** any rendered line is emitted (message chunk, tool line, plan, usage, lifecycle diagnostic, `ptah.log`, or agent stderr passthrough)
 - **THEN** the line begins with a `yyyy-mm-dd HH:MM:SS` local-time timestamp
 
 #### Scenario: No-color keeps plain timestamps
@@ -77,25 +77,25 @@ Every rendered output line — agent message chunks, tool lines, plan summaries,
 - **THEN** the output line is exactly the script's text with no timestamp or prefix added
 
 ### Requirement: Version flag
-The CLI SHALL support `--version`, printing the ponos version string and exiting 0.
+The CLI SHALL support `--version`, printing the ptah version string and exiting 0.
 
 #### Scenario: Print version
-- **WHEN** `ponos --version` is invoked
+- **WHEN** `ptah --version` is invoked
 - **THEN** the version string is printed and the process exits 0
 
 ### Requirement: Script end waits for outstanding tasks
-WHEN the main script chunk finishes while spawned tasks are still running, the process SHALL wait for all outstanding tasks to complete before exiting, UNLESS the script calls `ponos.exit(code)`.
+WHEN the main script chunk finishes while spawned tasks are still running, the process SHALL wait for all outstanding tasks to complete before exiting, UNLESS the script calls `ptah.exit(code)`.
 
 #### Scenario: Pending spawn at script end
-- **WHEN** the main chunk returns while a `ponos.spawn` task is still awaiting an agent prompt
-- **THEN** ponos waits for that task to finish before exiting
+- **WHEN** the main chunk returns while a `ptah.spawn` task is still awaiting an agent prompt
+- **THEN** ptah waits for that task to finish before exiting
 
 #### Scenario: Explicit exit
-- **WHEN** the script calls `ponos.exit(3)` while tasks are pending
+- **WHEN** the script calls `ptah.exit(3)` while tasks are pending
 - **THEN** pending tasks and agent processes are torn down and the process exits with code 3
 
 ### Requirement: Uncaught script error fails the run
-WHEN a script error escapes the main chunk uncaught, ponos SHALL cancel all in-flight prompt turns, terminate all agent subprocesses, print the error to stderr, and exit with a non-zero code. A task error that is never delivered to the script is treated the same way at script end: after all outstanding tasks complete, any task whose error was never observed (via `:await()`, `join`, or as a value in `ponos.parallel` results) SHALL fail the run with that error printed to stderr and a non-zero exit code — unless the script already terminated via `ponos.exit`, whose code wins.
+WHEN a script error escapes the main chunk uncaught, ptah SHALL cancel all in-flight prompt turns, terminate all agent subprocesses, print the error to stderr, and exit with a non-zero code. A task error that is never delivered to the script is treated the same way at script end: after all outstanding tasks complete, any task whose error was never observed (via `:await()`, `join`, or as a value in `ptah.parallel` results) SHALL fail the run with that error printed to stderr and a non-zero exit code — unless the script already terminated via `ptah.exit`, whose code wins.
 
 #### Scenario: Error propagation
 - **WHEN** a spawned task raises and the script awaits it without catching
@@ -103,11 +103,11 @@ WHEN a script error escapes the main chunk uncaught, ponos SHALL cancel all in-f
 
 #### Scenario: Never-retrieved task error at script end
 - **WHEN** a spawned task raises an error the script never observes via `await`/`join`, and the main chunk finishes normally
-- **THEN** ponos waits for outstanding tasks, prints the task's error to stderr, and exits non-zero
+- **THEN** ptah waits for outstanding tasks, prints the task's error to stderr, and exits non-zero
 
 ### Requirement: Session cwd defaults to invocation directory
-The default working directory for agent sessions SHALL be the directory from which `ponos run` was invoked, unless the script overrides it per session.
+The default working directory for agent sessions SHALL be the directory from which `ptah run` was invoked, unless the script overrides it per session.
 
 #### Scenario: Default cwd
 - **WHEN** a session is created without an explicit `cwd`
-- **THEN** the session's working directory is ponos's invocation directory
+- **THEN** the session's working directory is ptah's invocation directory

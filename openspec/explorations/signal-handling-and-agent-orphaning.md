@@ -1,4 +1,4 @@
-# Exploration: What happens to agent subprocesses when the ponos runtime is interrupted?
+# Exploration: What happens to agent subprocesses when the ptah runtime is interrupted?
 
 **Date:** 2026-08-21
 **Status:** Explored — no change proposal yet
@@ -6,8 +6,8 @@
 
 ## TL;DR
 
-No. On an external interrupt (SIGINT / SIGTERM), ponos dies instantly via the OS
-default handler and the agent subprocess is **orphaned** — ponos never kills it,
+No. On an external interrupt (SIGINT / SIGTERM), ptah dies instantly via the OS
+default handler and the agent subprocess is **orphaned** — ptah never kills it,
 and the terminal's signal never reaches it either. Agents are only killed along
 the in-process teardown paths (script error, explicit exit, normal completion),
 which SIGKILL the whole process group promptly.
@@ -20,7 +20,7 @@ which SIGKILL the whole process group promptly.
 builds a multi-thread tokio runtime, `block_on`s the LocalSet-driven `script::run`,
 and returns the exit code. No `tokio::signal`, no ctrlc crate, no atexit.
 
-Consequence: SIGINT/Ctrl-C takes the kernel default action — ponos is terminated
+Consequence: SIGINT/Ctrl-C takes the kernel default action — ptah is terminated
 immediately. No Rust destructors run (no `Drop` for `ChildGuard`, no
 `kill_and_reap`), and none of the `script::run` match arms are reached.
 
@@ -31,7 +31,7 @@ immediately. No Rust destructors run (no `Drop` for `ChildGuard`, no
 | Path | `cancel` | What teardown does |
 |---|---|---|
 | Uncaught script error | `true` | `session/cancel` each session, close, join |
-| `ponos.exit(n)` (ExitSignal) | `true` | same |
+| `ptah.exit(n)` (ExitSignal) | `true` | same |
 | Normal script completion (after `wait_outstanding`) | `false` | close + join only |
 
 `teardown` → `SessionHandle::close()` → driver breaks its command loop →
@@ -65,7 +65,7 @@ and group-kill is the only way to reach the real agent behind the wrapper. The
 crate's `ChildGuard::Drop` also SIGKILLs the group.
 
 Flip side: when you press Ctrl-C in a terminal, the tty delivers SIGINT to the
-**foreground process group** — ponos's group. The agent's group is not in it.
+**foreground process group** — ptah's group. The agent's group is not in it.
 
 ## Behavior map
 
@@ -76,7 +76,7 @@ Flip side: when you press Ctrl-C in a terminal, the tty delivers SIGINT to the
                         │
                         ▼
                    ┌──────────┐
-                   │  ponos   │  kernel default: process dies NOW
+                   │  ptah   │  kernel default: process dies NOW
                    │ (killed) │  no Drop, no teardown, no kill
                    └────┬─────┘
                         │ stdin pipe closes (EOF)
@@ -87,7 +87,7 @@ Flip side: when you press Ctrl-C in a terminal, the tty delivers SIGINT to the
                    └──────────┘  (npx/uvx wrappers often ignore it)
 
  script error /    ──▶ teardown(cancel=true) ──▶ session/cancel ──▶ group SIGKILL
- ponos.exit(n)                                                     (immediate)
+ ptah.exit(n)                                                     (immediate)
 
  script ends       ──▶ wait_outstanding ──▶ teardown(cancel=false) ──▶ group SIGKILL
  normally                                                            (immediate)
@@ -114,13 +114,13 @@ grace), while the signal path is *less* than they'd expect (nothing at all).
 2. **First vs second signal**: common CLI convention is Ctrl-C once = graceful
    teardown, Ctrl-C twice = immediate abort. Worth adopting?
 3. **Exit code contract**: `AGENTS.md` pins the exit-code contract
-   (0/1/2/n-via-`ponos.exit`). Signal deaths would want a defined code too
+   (0/1/2/n-via-`ptah.exit`). Signal deaths would want a defined code too
    (e.g. 130) — needs to slot into that contract deliberately.
 4. **Where to hook it**: a `tokio::signal` watch inside `script::run` (needs a
    cooperative abort of the Lua evaluation), vs a signal-safe flag the driver
    tasks poll. mlua async eval doesn't trivially cancel mid-chunk — this is the
    main design question.
-5. **stdin-EOF reliance**: should ponos instead *close stdin first* and let a
+5. **stdin-EOF reliance**: should ptah instead *close stdin first* and let a
    well-behaved agent shut itself down (the ACP `session/stop`-ish route),
    keeping SIGKILL as the backstop?
 

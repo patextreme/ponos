@@ -17,7 +17,7 @@ change.
 
 1. **Dependency-direction enforcement.** Floor pre-committed in the
    pre-② design session: a small custom integration test that greps
-   `ponos-core` for forbidden imports (mlua beyond `task`'s data level,
+   `ptah-core` for forbidden imports (mlua beyond `task`'s data level,
    tokio I/O, fs, adapter crates) + workspace `[workspace.lints]` with
    `[lints] workspace = true` — zero deps, offline-safe, cannot fail to
    land. Nice-to-haves to evaluate at pick-up time, demoted:
@@ -34,7 +34,7 @@ change.
    events, interaction-policy port) where the event types live.
 4. **Straggler hygiene**: any leftover path shims from ①/② moves, dead
    module-tree artifacts, `git grep` for stale paths. **Carve-out:** the
-   `ponos` facade in `ponos-cli` (member-crate re-exports + core compat
+   `ptah` facade in `ptah-cli` (member-crate re-exports + core compat
    re-exports of `config`/`task`) is load-bearing API the tests depend on —
    it stays. Also fix stale doc paths (e.g. `src/config.rs` references in
    AGENTS.md, owned by item 3).
