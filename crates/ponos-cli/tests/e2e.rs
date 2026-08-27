@@ -50,7 +50,7 @@ fn run_with_registry(
         // The CLI always injects the tokio runner; the suite runs the
         // same composition so `ponos.exec` behaves identically here.
         process_runner: Some(Arc::new(TokioProcessRunner)),
-    shutdown: None,
+        shutdown: None,
         renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
     };
     let rt = tokio::runtime::Builder::new_multi_thread()

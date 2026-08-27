@@ -1095,6 +1095,99 @@ fn sigint_exec_lines_render_in_color_mode() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn sigint_during_task_drain_cancels_run_and_kills_in_flight_exec() {
+    // Regression: the shutdown watch was once raced only against the
+    // script body, so a SIGINT arriving while spawned tasks drain (the
+    // window after the body ends — here a task parked in a no-budget
+    // exec, which keeps the window open indefinitely) was swallowed,
+    // and only the second signal's hard exit could end the run,
+    // skipping teardown and orphaning the exec child. The first signal
+    // must ride the same teardown path as during the body: exit 130,
+    // child dead, no orphan.
+    use std::io::BufRead;
+    use std::process::Stdio;
+
+    let tag = "8845";
+    common::kill_processes(tag);
+    common::wait_for_processes(tag, 0, "stale tag cleared before the run");
+
+    // Unlike signal_cancels_the_run's script, the main body ENDS right
+    // after reporting parked — the signal lands in the task drain.
+    let project = Project::new("signal-drain", &[]);
+    let script = project.script(&format!(
+        r#"
+ponos.spawn(function() return ponos.exec("sleep {tag}") end)
+ponos.sleep(200)
+ponos.log("parked")
+"#
+    ));
+    let mut child = std::process::Command::new(ponos_bin())
+        .arg("run")
+        .arg("--no-color")
+        .arg(&script)
+        .current_dir(&project.dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ponos");
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let stdout = child.stdout.take().expect("piped stdout");
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            if tx.send(line.expect("read stdout")).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = String::new();
+    loop {
+        let line = rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("script never parked");
+        seen.push_str(&line);
+        seen.push('\n');
+        if line.contains("parked") {
+            break;
+        }
+    }
+    assert!(
+        seen.contains(&format!("exec: sleep {tag}")),
+        "exec must be in flight before the signal:\n{seen}"
+    );
+    // Let the body finish and the run settle into the drain.
+    std::thread::sleep(std::time::Duration::from_millis(250));
+
+    unsafe { libc::kill(child.id() as i32, libc::SIGINT) };
+
+    // Bounded reap: under the bug the run never exits on one signal
+    // (the parked exec has no budget), so the regression must fail
+    // here rather than hang the suite.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait ponos") {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "run ignored the first SIGINT during the task drain (output so far):\n{seen}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    while let Ok(line) = rx.recv_timeout(std::time::Duration::from_secs(1)) {
+        seen.push_str(&line);
+        seen.push('\n');
+    }
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "drain-cancelled run must exit 130; output:\n{seen}"
+    );
+    common::wait_for_processes(tag, 0, "drain teardown killed the in-flight exec");
+}
+
 #[test]
 fn teardown_cancelled_exec_renders_start_but_no_end_line() {
     // shell-exec "Exec lifecycle is observable": an exec cancelled by

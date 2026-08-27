@@ -271,7 +271,7 @@ fn install_signal_monitor(
 ) -> Option<tokio::task::JoinHandle<()>> {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         let Ok(mut int) = signal(SignalKind::interrupt()) else {
             return None;

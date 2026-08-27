@@ -19,7 +19,7 @@ fn test_lua(script_dir: &std::path::Path) -> Lua {
         registry: ponos::config_fs::from_parts(None, None).unwrap(),
         transport: std::sync::Arc::new(ponos::acp::Transport),
         process_runner: None,
-    shutdown: None,
+        shutdown: None,
         renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
     };
     script::setup_lua(&cfg).unwrap()

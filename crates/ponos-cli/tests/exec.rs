@@ -114,7 +114,7 @@ fn exec_lua(runner: Option<Arc<dyn ProcessRunner>>, sink: Arc<dyn EventSink>) ->
         registry: config_fs::from_parts(None, None).unwrap(),
         transport: Arc::new(ponos::acp::Transport),
         process_runner: runner,
-    shutdown: None,
+        shutdown: None,
         renderer: sink,
     };
     script::setup_lua(&cfg).unwrap()

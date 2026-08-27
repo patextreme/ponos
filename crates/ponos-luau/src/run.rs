@@ -54,7 +54,12 @@ async fn kill_inflight_execs(state: &Rc<RuntimeState>) {
     // and with it the port future — so it is dead by construction, not
     // a straggler worth waiting on.
     for _ in 0..400 {
-        if state.execs.borrow().iter().all(|e| Rc::strong_count(e) == 1) {
+        if state
+            .execs
+            .borrow()
+            .iter()
+            .all(|e| Rc::strong_count(e) == 1)
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -64,9 +69,25 @@ async fn kill_inflight_execs(state: &Rc<RuntimeState>) {
 }
 
 /// Wait for all outstanding spawned tasks to complete (script-end drain).
-async fn wait_outstanding(state: &Rc<RuntimeState>) {
-    while !state.tasks.pending().is_empty() {
-        tokio::time::sleep(Duration::from_millis(5)).await;
+/// The outer-cancel watch stays live through the drain: a termination
+/// signal arriving while spawned tasks park in long turns or no-budget
+/// execs (a window that can stay open indefinitely after the script
+/// body ends) must ride the same cancelled path as one arriving during
+/// the body — otherwise the first signal is swallowed and only the
+/// second signal's hard exit could end the run, skipping teardown.
+/// Returns the cancel code when the watch fires before the tasks do.
+async fn wait_outstanding(
+    state: &Rc<RuntimeState>,
+    shutdown: &mut Option<tokio::sync::watch::Receiver<i32>>,
+) -> Option<i32> {
+    loop {
+        if state.tasks.pending().is_empty() {
+            return None;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(5)) => {}
+            code = shutdown_code(shutdown.as_mut()) => return Some(code),
+        }
     }
 }
 
@@ -158,11 +179,34 @@ pub async fn run(cfg: RunConfig) -> RunOutcome {
         }
     }
 
-    // Normal end: wait for outstanding tasks first.
-    wait_outstanding(&state).await;
+    // Normal end: wait for outstanding tasks first — still racing the
+    // outer cancel, because the drain is part of the run.
+    if let Some(code) = wait_outstanding(&state, &mut shutdown).await {
+        teardown(&state, true).await;
+        return RunOutcome {
+            code,
+            error: None,
+            undelivered_errors: vec![],
+        };
+    }
 
     // An exit signalled from within a (now-finished) task still wins.
     if let Some(code) = state.exit_code.get() {
+        teardown(&state, true).await;
+        return RunOutcome {
+            code,
+            error: None,
+            undelivered_errors: vec![],
+        };
+    }
+
+    // Boundary race: the signal may have landed after the drain's last
+    // watch poll. One non-blocking check keeps a first signal from
+    // slipping between phases into silence. (A signal landing during a
+    // teardown itself stays unpolled by design: teardown is bounded,
+    // its kills run unconditionally, and the second-signal hard exit
+    // remains the escape.)
+    if let Some(code) = shutdown_fired(&shutdown) {
         teardown(&state, true).await;
         return RunOutcome {
             code,
@@ -190,5 +234,16 @@ async fn shutdown_code(shutdown: Option<&mut tokio::sync::watch::Receiver<i32>>)
     match rx.changed().await {
         Ok(()) => *rx.borrow(),
         Err(_sender_gone) => std::future::pending().await,
+    }
+}
+
+/// Non-blocking companion to [`shutdown_code`]: the cancel code when
+/// the watch has already fired, `None` when it has not (or never will
+/// — a dropped sender means no outer cancel, same as `shutdown_code`).
+fn shutdown_fired(shutdown: &Option<tokio::sync::watch::Receiver<i32>>) -> Option<i32> {
+    let rx = shutdown.as_ref()?;
+    match rx.has_changed() {
+        Ok(true) => Some(*rx.borrow()),
+        _ => None,
     }
 }
