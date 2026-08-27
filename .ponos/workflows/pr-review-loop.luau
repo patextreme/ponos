@@ -4,7 +4,7 @@ local cfg = require("./../utils/config")
 local predicateAgent = require("./../utils/predicate")
 
 -- compile-time constants first
-const PR_URL = "https://github.com/patextreme/ponos/pull/3"
+const PR_URL = "https://github.com/patextreme/ponos/pull/4"
 const MAX_ITERATIONS = 15
 
 local pi: Agent = ponos.agent("pi")
