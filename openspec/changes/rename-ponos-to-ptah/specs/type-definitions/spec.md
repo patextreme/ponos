@@ -18,7 +18,7 @@ The definitions SHALL additionally type `exec`: `ptah.exec(cmd: string, opts?: {
 - **THEN** analysis accepts both uses, while an invented outcome field (e.g. `r.txt`) still reports a type error naming the result table type (excess keys in option table literals are a known analyzer residual, documented in the README)
 
 #### Scenario: Constructor config type-checks
-- **WHEN** a strict-mode script analyzed with the definitions passes `config = { model = "opus" }` in `agent:session(…)` options
+- **WHEN** a script analyzed with the definitions passes `config = { model = "opus" }` in `agent:session(…)` options
 - **THEN** the `SessionOptions` type declares no `config` field (excess keys in option table literals are a known analyzer residual, documented in the README), and running the script raises the pre-spawn rejection error instead
 
 #### Scenario: Wrong setConfig value type

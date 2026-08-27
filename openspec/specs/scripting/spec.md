@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines the Luau scripting environment embedded in ponos: the sandboxed standard library, module resolution, the `ponos` API namespace, concurrency primitives, and error/cancellation semantics observable by script authors.
+Defines the Luau scripting environment embedded in ptah: the sandboxed standard library, module resolution, the `ptah` API namespace, concurrency primitives, and error/cancellation semantics observable by script authors.
 
 ## Requirements
 

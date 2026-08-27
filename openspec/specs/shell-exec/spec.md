@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines how ponos scripts execute deterministic shell work directly: the `ponos.exec` binding (invocation, result contract, timeout, environment), the injected process-execution capability that funds it, and the teardown and observability behavior surrounding a running command.
+Defines how ptah scripts execute deterministic shell work directly: the `ptah.exec` binding (invocation, result contract, timeout, environment), the injected process-execution capability that funds it, and the teardown and observability behavior surrounding a running command.
 
 ## Requirements
 
@@ -73,7 +73,7 @@ When the script errors, calls `ponos.exit`, or the run is cancelled (e.g. Ctrl-C
 - **WHEN** a spawned script task has `ponos.exec("sleep 30")` in flight and the script's main body raises an error that ends the run
 - **THEN** the in-flight exec's process group is killed during teardown
 
-#### Scenario: ponos.exit kills running child
+#### Scenario: ptah.exit kills running child
 - **WHEN** a script calls `ponos.exit(0)` while an exec is in flight
 - **THEN** teardown kills the exec's process group before the process exits
 

@@ -1,0 +1,17 @@
+[package]
+name = "ptah-acp"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+ptah-core = { path = "../ptah-core" }
+ptah-result = { path = "../ptah-result" }
+agent-client-protocol = { workspace = true }
+async-process = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+libc = { workspace = true }

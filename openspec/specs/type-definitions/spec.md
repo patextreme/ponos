@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines the Luau type definitions that describe the `ponos` script API and its sandboxed environment to editors and analyzers: their content contract, distribution via the `ponos types` subcommand, and the guards that keep them synchronized with the runtime.
+Defines the Luau type definitions that describe the `ptah` script API and its sandboxed environment to editors and analyzers: their content contract, distribution via the `ptah types` subcommand, and the guards that keep them synchronized with the runtime.
 
 ## Requirements
 

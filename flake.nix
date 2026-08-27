@@ -1,5 +1,5 @@
 {
-  description = "ponos — Luau-scripted multi-agent orchestration over the Agent Client Protocol";
+  description = "ptah — Luau-scripted multi-agent orchestration over the Agent Client Protocol";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

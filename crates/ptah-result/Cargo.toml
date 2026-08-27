@@ -1,0 +1,14 @@
+[package]
+name = "ptah-result"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+ptah-core = { path = "../ptah-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

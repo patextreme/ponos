@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines the user-facing command surface of the ponos binary: how scripts are invoked, how output is controlled, and how the process exits.
+Defines the user-facing command surface of the ptah binary: how scripts are invoked, how output is controlled, and how the process exits.
 
 ## Requirements
 

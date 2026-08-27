@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines the `ponos check` subcommand: no-execution verification of a script through an in-process compile pass, static lints over the literal require graph, and a luau-lsp typecheck pass, plus the findings-reporting format and exit-code contract.
+Defines the `ptah check` subcommand: no-execution verification of a script through an in-process compile pass, static lints over the literal require graph, and a luau-lsp typecheck pass, plus the findings-reporting format and exit-code contract.
 
 ## Requirements
 

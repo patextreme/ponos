@@ -19,8 +19,8 @@ The scripting environment SHALL provide `ptah.exec(cmd: string, opts?: table)` t
 - **WHEN** a script awaits a `ptah.spawn`ed agent task and, before awaiting it, calls `ptah.exec("sleep 0.2")`
 - **THEN** the spawned task continues to progress during the exec and both complete
 
-### Requirement: Exec raises only on could-not-run and timeout
-`ptah.exec` SHALL raise a Lua error when the command could not be executed at all (e.g. the shell binary cannot be spawned), and when `timeoutMs` elapses. No other condition raises. On timeout, the command's process group SHALL be killed before the error is raised. The raised timeout error SHALL identify the command and the elapsed budget, so a script can distinguish it from a turn result.
+### Requirement: Exec raises only on could-not-run, timeout, and teardown
+`ptah.exec` SHALL raise a Lua error when the command could not be executed at all (e.g. the shell binary cannot be spawned), and when `timeoutMs` elapses. No other condition raises while the run continues. On timeout, the command's process group SHALL be killed before the error is raised. The raised timeout error SHALL identify the command and the elapsed budget, so a script can distinguish it from a turn result. One further raise exists only at teardown: when the run itself is ending (script error, `ptah.exit`, or outer cancellation), an in-flight exec raises a catchable error naming the command and the run's end after its process group is killed — that error is the run's shutdown, not the command's outcome, and it never changes the run's own result (a `ptah.exit(0)` with an exec in flight still exits 0).
 
 #### Scenario: Timeout kills the process group and raises
 - **WHEN** a script calls `ptah.exec("sleep 5", { timeoutMs = 100 })`
@@ -61,7 +61,7 @@ Process execution SHALL reach the scripting environment only through a process-r
 - **THEN** the command runs; no flag, registry entry, or config opt-in is required
 
 ### Requirement: In-flight execs are killed at teardown
-When the script errors, calls `ptah.exit`, or the run is cancelled (e.g. Ctrl-C), any still-running `ptah.exec` child SHALL have its process group killed — no orphaned processes outlive the run.
+When the script errors, calls `ptah.exit`, or the run is cancelled (e.g. Ctrl-C), any still-running `ptah.exec` child SHALL have its process group killed — no orphaned processes outlive the run. When the cancellation is an outer signal (SIGINT/SIGTERM forwarded by the composition root), the run SHALL exit with the shell-conventional 128+signal code (130/143) after teardown, rather than dying on the signal with teardown skipped.
 
 #### Scenario: Script error kills running child
 - **WHEN** a spawned script task has `ptah.exec("sleep 30")` in flight and the script's main body raises an error that ends the run
@@ -71,8 +71,16 @@ When the script errors, calls `ptah.exit`, or the run is cancelled (e.g. Ctrl-C)
 - **WHEN** a script calls `ptah.exit(0)` while an exec is in flight
 - **THEN** teardown kills the exec's process group before the process exits
 
+#### Scenario: Ctrl-C kills the running child and exits 130
+- **WHEN** SIGINT interrupts a run while an exec is in flight (the exec child sits in its own process group, out of the terminal signal's reach)
+- **THEN** teardown kills the exec's process group before the process exits, and the run exits 130 rather than orphaning the child (SIGTERM likewise runs teardown and exits 143)
+
+#### Scenario: Teardown cancellation does not change the run's outcome
+- **WHEN** a script calls `ptah.exit(0)` while a spawned task is parked in `ptah.exec`
+- **THEN** the run still exits 0 and nothing about the cancelled exec surfaces in the run's result — the cancellation is shutdown, not a script failure (a script-ending error likewise still reports as itself, not as a cancelled-exec error)
+
 ### Requirement: Exec lifecycle is observable
-Each `ptah.exec` call SHALL emit lifecycle events through the event sink: a start event carrying the command string, and an end event carrying the exit status (or timeout/spawn-failure marker) and duration. Captured stdout/stderr are not streamed to the terminal; they belong to the script.
+Each `ptah.exec` call SHALL emit lifecycle events through the event sink: a start event carrying the command string, and an end event carrying the exit status (or timeout/spawn-failure marker) and duration. A call cancelled by teardown emits no end event — the run is ending and the kill, not the command's outcome, is what ended it. Captured stdout/stderr are not streamed to the terminal; they belong to the script.
 
 #### Scenario: Lifecycle events fire
 - **WHEN** a script calls `ptah.exec("printf hi")`

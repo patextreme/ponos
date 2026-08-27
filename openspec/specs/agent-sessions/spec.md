@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines how ponos communicates with ACP agents as a client: subprocess lifecycle, session creation, prompt turn behavior, streaming update handling, and the capability surface ponos exposes to agents.
+Defines how ptah communicates with ACP agents as a client: subprocess lifecycle, session creation, prompt turn behavior, streaming update handling, and the capability surface ptah exposes to agents.
 
 ## Requirements
 

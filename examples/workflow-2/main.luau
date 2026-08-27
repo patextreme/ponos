@@ -4,6 +4,6 @@
 -- directory.
 local helper = require("../shared/helper")
 
-local agent = ponos.agent("demo")
+local agent = ptah.agent("demo")
 local lines = helper.review_files(agent, { "docs/architecture.md", "docs/runbook.md" })
-ponos.log(("workflow-2 reviewed %d files"):format(#lines))
+ptah.log(("workflow-2 reviewed %d files"):format(#lines))

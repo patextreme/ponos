@@ -4,8 +4,8 @@
 -- boundary, so sibling trees can share modules.
 local helper = require("../shared/helper")
 
-local agent = ponos.agent("demo")
+local agent = ptah.agent("demo")
 local lines = helper.review_files(agent, { "src/main.rs", "src/config.rs" })
 for _, line in ipairs(lines) do
-	ponos.log(line)
+	ptah.log(line)
 end

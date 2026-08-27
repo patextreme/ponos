@@ -42,9 +42,11 @@ same wire protocol shapes; only the names change.
   block, rewritten for Ptah), `skills/ponos/` → `skills/ptah/` (SKILL.md API
   references and the `github.com/patextreme/ptah` URLs), `examples/`,
   `.ponos/` scripts (utils/workflows/instructions), `.helix/languages.toml`
-  definitions path, AGENTS.md, and all of `openspec/` — synced specs via
-  these deltas, and archived changes' prose swept mechanically (git history
-  preserves the original wording; the working tree speaks one name).
+  definitions path, AGENTS.md, and `openspec/`: synced specs flip via
+  these deltas at archive, `## Purpose` prose is edited directly, and
+  `openspec/changes/` — this record included — stays verbatim as a documented
+  grep-gate carve-out (transition prose like `PONOS_BRIDGE_ADDR` → `PTAH_*`
+  collapses into noise if swept; git history retains every original word).
 - Sequencing: lands on a quiet tree — `add-shell-exec` archives first, and
   these deltas are written against the post-`add-shell-exec` spec surface,
   carrying its additions (e.g. `ptah.exec`) forward renamed, never reverted.

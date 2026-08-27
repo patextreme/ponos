@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Defines the observability contract of ponos's streaming stdout log: what is
+Defines the observability contract of ptah's streaming stdout log: what is
 rendered for each prompt turn and tool call, how long or short those lines
-are, and which flags gate them. The render output is ponos's only log; this
+are, and which flags gate them. The render output is ptah's only log; this
 capability is what makes a multi-agent fan-out followable.
 
 ## Requirements

@@ -30,8 +30,12 @@ Two structural constraints shape everything:
   any two components disagree about a name.
 - Zero compatibility shims: no `ponos` global alias, no old-path fallback, no
   old env-var acceptance (decision ratified in proposal).
-- The tree is grep-clean afterwards: `ponos` survives only where deliberately
-  kept (see Decisions — README provenance note).
+- Grep hygiene in two stages: after the commit, everything outside `openspec/`
+  carries only the deliberate README provenance survivor; after archive (when
+  main-spec bodies sync from these deltas), all of `openspec/specs/` is clean
+  too. `openspec/changes/` — this change's own record and the archive — is a
+  standing carve-out: rename history keeps its before→after wording verbatim
+  for readability (see D5).
 
 **Non-Goals**
 
@@ -83,7 +87,7 @@ The blind sweep cannot know these; each gets an explicit task:
   `mcp__ponos__result_submit` → `mcp__ptah__result_submit`
 - README name-origin block: rewritten for Ptah, keeping one deliberate
   "formerly ponos" sentence for discoverability — the single allowed `ponos`
-  survivor in the tree (the grep gate's allowlist entry).
+  survivor outside `openspec/changes/` (see D5 for the carve-out).
 
 ### D4: Sequencing — quiet tree (ratified)
 `add-shell-exec` archives first; its spec deltas sync into `openspec/specs/`
@@ -93,12 +97,36 @@ archive time. Task 0 verifies the precondition. Same pattern as the archived
 `2026-08-22-rename-script-api-camelcase` change (which sequenced behind
 `add-typed-agent-results` identically).
 
-### D5: Archived OpenSpec changes are swept, main-spec Purpose prose is swept in-tree
-Archive deltas sync requirement blocks only; `## Purpose` prose in
-`openspec/specs/*/spec.md` and the 16 archived change directories are edited
-directly in this change's sweep (git history preserves original wording).
-No requirement names change (none start with `ponos`; verified), so no
-RENAMED sections are needed anywhere.
+### D5: `openspec/changes/` is carved out verbatim; main-spec Purpose prose is swept in-tree
+Archive deltas sync requirement blocks only. The `## Purpose` prose in
+`openspec/specs/*/spec.md` is edited directly (task 5.3), because delta sync
+never touches Purpose prose; requirement *bodies* flip only at archive-time
+sync (D6), so between commit and archive `openspec/specs/` legitimately still
+contains `ponos` tokens — hence the two-stage grep gate (Risks). This
+change's own record under `openspec/changes/rename-ponos-to-ptah/` and every
+previously archived change keep their `ponos` tokens verbatim: transition
+prose like "`PONOS_BRIDGE_ADDR` → `PTAH_*`" collapses into noise if swept, so
+the directories document the mapping instead. `openspec/changes/` is a
+standing exclusion in the grep gate, alongside `.git`/`target`/`Cargo.lock`/
+`result*`. No requirement names change (none start with `ponos`; verified),
+so no RENAMED sections are needed anywhere.
+
+### D6: Scenario-heading rename rides via a one-line main-spec pre-sync
+OpenSpec's MODIFIED guard — enforced identically by `openspec validate` and at
+archive time in `specs-apply` — compares scenario headings between the current
+spec and the delta block as literal strings; there is no syntax for renaming a
+heading inside a MODIFIED requirement (RENAMED operates on requirement headers
+only). Renaming `#### Scenario: ponos.exit kills running child` through the
+delta alone therefore makes this change invalid to validate and impossible to
+archive. Resolution: pre-apply exactly that one heading in
+`openspec/specs/shell-exec/spec.md` ahead of archive. The delta still carries
+the full renamed block, so `specs-apply` sees normalized-equal content for that
+requirement and skips cleanly (its documented early-sync pattern). Every other
+main-spec requirement block continues to flip only at archive, per D5. The body
+of that scenario keeps speaking `ponos.exit` until the sweep; only its heading
+token flips early. *Alternative rejected*: carrying the literal `ponos.exit`
+heading until after archive — it would guarantee a stale `ponos` marker inside
+the freshly synced spec and contradict the grep gate.
 
 ## Risks / Trade-offs
 
@@ -108,8 +136,10 @@ RENAMED sections are needed anywhere.
 - [`include_str!` path or Nix filter missed → build breaks late] → Both are
   explicit D3 tasks; `nix flake check` is a gate precisely because plain
   `cargo build` does not exercise the source filter.
-- [Half-renamed commit pushed] → Single-commit rule; the grep gate
-  (`rg -i ponos` → only the README allowlist hit) runs before commit.
+- [Half-renamed commit pushed] → Single-commit rule; the grep gate runs in two
+  stages: pre-commit over everything outside `openspec/` (README-only
+  survivors), then post-archive re-run including `openspec/specs/`, always
+  excluding `openspec/changes/` per D5.
 - [Users' deployed skill symlink / configs dangle] → Manual follow-up
   checklist in tasks.md; AGENTS.md documents that deployed copies are nix-store
   symlinks, so a `nix build` + re-link fixes them.
@@ -122,8 +152,10 @@ RENAMED sections are needed anywhere.
 1. Verify precondition: `add-shell-exec` archived (task 0).
 2. `git mv` directory renames; run sweep; apply D3 fixes.
 3. Gates: `cargo test` (offline suite incl. e2e/acp/examples via mock-agent),
-   `nix flake check`, grep-clean check.
-4. Commit; archive this change (sync applies the ten deltas); manual
-   follow-ups (repo, dir, symlink, user config) same day.
+   `nix flake check`, and the pre-commit grep gate (outside `openspec/`;
+   README-only survivors).
+4. Commit; archive this change (sync applies the ten deltas); re-run the grep
+   gate including `openspec/specs/` (`openspec/changes/` carve-out unchanged);
+   manual follow-ups (repo, dir, symlink, user config) same day.
 5. Rollback: `git revert` of the single commit restores everything except the
    GitHub repo name (renamed manually, reversible in settings).
