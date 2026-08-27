@@ -17,7 +17,7 @@
       RUST_BACKTRACE = 1;
 
       shellHook = ''
-        echo "ponos devshell: $(rustc --version)"
+        echo "ptah devshell: $(rustc --version)"
       '';
     };
   };

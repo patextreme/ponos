@@ -1,0 +1,254 @@
+//! Agent registry configuration model: agent launch specs, registry
+//! merging (project-wins precedence), and `${VAR}` interpolation.
+//!
+//! Registries map agent names to launch specs:
+//!
+//! ```toml
+//! [agents.claude]
+//! command = "npx"
+//! args = ["-y", "@agentclientprotocol/claude-agent-acp"]
+//! env = { ANTHROPIC_MODEL = "${MODEL}" }
+//! ```
+//!
+//! Values are stored raw; interpolation happens at resolve time, against
+//! ptah's process environment. Project entries override user entries
+//! wholesale per agent name (TOML parsing and file discovery live in
+//! `config_fs`, not here).
+
+use std::collections::BTreeMap;
+
+/// A single agent launch specification, as written in a registry file.
+///
+/// Values are stored raw; `${VAR}` interpolation happens at resolve time.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct AgentSpec {
+    /// Program to spawn.
+    pub command: String,
+    /// Extra arguments for the program.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment overrides merged over the inherited environment.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+impl AgentSpec {
+    /// A spec with just a command.
+    pub fn new(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+        }
+    }
+
+    /// Interpolate `${VAR}` (unset → empty) across command, args, and env values.
+    pub fn interpolate(&self, lookup: &dyn Fn(&str) -> Option<String>) -> AgentSpec {
+        AgentSpec {
+            command: interpolate(&self.command, lookup),
+            args: self.args.iter().map(|a| interpolate(a, lookup)).collect(),
+            env: self
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), interpolate(v, lookup)))
+                .collect(),
+        }
+    }
+}
+
+/// Replace every `${VAR}` occurrence in `s` with the lookup result
+/// (empty string when the variable is unset).
+fn interpolate(s: &str, lookup: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}') {
+            Some(end) => {
+                let var = &after[..end];
+                if let Some(v) = lookup(var) {
+                    out.push_str(&v);
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                // Unterminated: keep literally.
+                out.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A resolved registry: user entries merged with project-wins precedence.
+#[derive(Debug, Default, Clone)]
+pub struct Registry {
+    agents: BTreeMap<String, AgentSpec>,
+}
+
+impl Registry {
+    /// Merge already-parsed registry layers: project entries replace user
+    /// entries per agent name; other entries merge. (Parsing TOML into
+    /// layers is `config_fs`'s job.)
+    pub fn from_layers(
+        user: Option<BTreeMap<String, AgentSpec>>,
+        project: Option<BTreeMap<String, AgentSpec>>,
+    ) -> Self {
+        let mut agents = BTreeMap::new();
+        for layer in [user, project].into_iter().flatten() {
+            for (name, spec) in layer {
+                agents.insert(name, spec); // project processed last: wins wholesale
+            }
+        }
+        Self { agents }
+    }
+
+    /// Resolve an agent by name, interpolating `${VAR}` from the process
+    /// environment. Errors name the unresolved agent.
+    pub fn resolve(&self, name: &str) -> Result<AgentSpec, ConfigError> {
+        self.resolve_with(name, &|var| std::env::var(var).ok())
+    }
+
+    /// Like [`Registry::resolve`] with an explicit environment lookup
+    /// (used by tests and callers that need deterministic interpolation).
+    pub fn resolve_with(
+        &self,
+        name: &str,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<AgentSpec, ConfigError> {
+        match self.agents.get(name) {
+            Some(spec) => Ok(spec.interpolate(lookup)),
+            None => Err(ConfigError::UnknownAgent {
+                name: name.to_string(),
+            }),
+        }
+    }
+
+    /// Names of all registered agents.
+    pub fn agent_names(&self) -> Vec<String> {
+        self.agents.keys().cloned().collect()
+    }
+}
+
+#[derive(Debug)]
+pub enum ConfigError {
+    UnknownAgent { name: String },
+    Parse { label: String, source: String },
+    Io { label: String, source: String },
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::UnknownAgent { name } => write!(
+                f,
+                "unknown agent `{name}`: not found in the user or project registry"
+            ),
+            ConfigError::Parse { label, source } => {
+                write!(f, "invalid {label} config: {source}")
+            }
+            ConfigError::Io { label, source } => {
+                write!(f, "failed to read {label} config: {source}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(command: &str, args: &[&str], env: &[(&str, &str)]) -> AgentSpec {
+        AgentSpec {
+            command: command.into(),
+            args: args.iter().map(std::string::ToString::to_string).collect(),
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    fn layers() -> (BTreeMap<String, AgentSpec>, BTreeMap<String, AgentSpec>) {
+        let user = BTreeMap::from([
+            (
+                "claude".to_string(),
+                spec("claude-acp-user", &["--old"], &[("MODEL", "sonnet")]),
+            ),
+            ("shared".to_string(), spec("shared-bin", &[], &[])),
+        ]);
+        let project = BTreeMap::from([
+            (
+                "claude".to_string(),
+                spec("claude-acp-project", &["--new"], &[]),
+            ),
+            ("gemini".to_string(), spec("gemini-acp", &[], &[])),
+        ]);
+        (user, project)
+    }
+
+    #[test]
+    fn project_overrides_user_wholesale() {
+        let (user, project) = layers();
+        let reg = Registry::from_layers(Some(user), Some(project));
+        let resolved = reg.resolve_with("claude", &|_| None).unwrap();
+        // Project definition wins; user fields (env MODEL) are NOT inherited.
+        assert_eq!(resolved.command, "claude-acp-project");
+        assert_eq!(resolved.args, vec!["--new"]);
+        assert!(
+            resolved.env.is_empty(),
+            "user env must not leak: {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn disjoint_agents_merge() {
+        let (user, project) = layers();
+        let reg = Registry::from_layers(Some(user), Some(project));
+        assert_eq!(
+            reg.resolve_with("gemini", &|_| None).unwrap().command,
+            "gemini-acp"
+        );
+        assert_eq!(
+            reg.resolve_with("shared", &|_| None).unwrap().command,
+            "shared-bin"
+        );
+    }
+
+    #[test]
+    fn no_registry_errors_naming_agent() {
+        let reg = Registry::from_layers(None, None);
+        let err = reg.resolve_with("claude", &|_| None).unwrap_err();
+        assert!(
+            err.to_string().contains("claude"),
+            "error must name the agent: {err}"
+        );
+    }
+
+    #[test]
+    fn interpolate_set_unset_and_embedded() {
+        let s = spec(
+            "${HOME}/bin/agent",
+            &["--key=${MISSING_KEY}", "a${X}b"],
+            &[("M", "${MODEL}")],
+        );
+        let lookup = |v: &str| -> Option<String> {
+            match v {
+                "HOME" => Some("/home/pat".into()),
+                "X" => Some("mid".into()),
+                "MODEL" => Some("opus".into()),
+                _ => None,
+            }
+        };
+        let out = s.interpolate(&lookup);
+        assert_eq!(out.command, "/home/pat/bin/agent");
+        assert_eq!(out.args[0], "--key=");
+        assert_eq!(out.args[1], "amidb");
+        assert_eq!(out.env["M"], "opus");
+    }
+}

@@ -1,0 +1,15 @@
+[package]
+name = "ptah-core"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-client-protocol = { workspace = true }
+jsonschema = { workspace = true }
+mlua = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

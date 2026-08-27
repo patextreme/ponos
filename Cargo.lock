@@ -1596,108 +1596,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ponos-acp"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "async-process",
- "futures",
- "libc",
- "ponos-core",
- "ponos-result",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "ponos-check"
-version = "0.1.0"
-dependencies = [
- "full_moon",
- "mlua",
- "ponos-core",
-]
-
-[[package]]
-name = "ponos-cli"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "clap",
- "futures",
- "libc",
- "mlua",
- "ponos-acp",
- "ponos-check",
- "ponos-config",
- "ponos-core",
- "ponos-luau",
- "ponos-render",
- "ponos-result",
- "rmcp",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "ponos-config"
-version = "0.1.0"
-dependencies = [
- "ponos-core",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "ponos-core"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "jsonschema",
- "mlua",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "ponos-luau"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "futures",
- "mlua",
- "ponos-core",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "ponos-render"
-version = "0.1.0"
-dependencies = [
- "jiff",
- "ponos-core",
-]
-
-[[package]]
-name = "ponos-result"
-version = "0.1.0"
-dependencies = [
- "ponos-core",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1748,6 +1646,108 @@ dependencies = [
  "tokio",
  "tracing",
  "windows",
+]
+
+[[package]]
+name = "ptah-acp"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "async-process",
+ "futures",
+ "libc",
+ "ptah-core",
+ "ptah-result",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "ptah-check"
+version = "0.1.0"
+dependencies = [
+ "full_moon",
+ "mlua",
+ "ptah-core",
+]
+
+[[package]]
+name = "ptah-cli"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "clap",
+ "futures",
+ "libc",
+ "mlua",
+ "ptah-acp",
+ "ptah-check",
+ "ptah-config",
+ "ptah-core",
+ "ptah-luau",
+ "ptah-render",
+ "ptah-result",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ptah-config"
+version = "0.1.0"
+dependencies = [
+ "ptah-core",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "ptah-core"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "jsonschema",
+ "mlua",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ptah-luau"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "futures",
+ "mlua",
+ "ptah-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ptah-render"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "ptah-core",
+]
+
+[[package]]
+name = "ptah-result"
+version = "0.1.0"
+dependencies = [
+ "ptah-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

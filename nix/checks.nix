@@ -3,7 +3,7 @@
   ...
 }: {
   # Offline test suite: the integration tests drive the in-repo mock agent
-  # only (no network). The source is the shared config.ponosSrc so the
+  # only (no network). The source is the shared config.ptahSrc so the
   # examples and fixtures the tests run are the same tree the package is
   # built from.
   perSystem = {
@@ -14,8 +14,8 @@
     craneLib = (inputs.crane.mkLib pkgs).overrideToolchain config.rustToolchain;
 
     commonArgs = {
-      pname = "ponos";
-      version = (builtins.fromTOML (builtins.readFile ../crates/ponos-cli/Cargo.toml)).package.version;
+      pname = "ptah";
+      version = (builtins.fromTOML (builtins.readFile ../crates/ptah-cli/Cargo.toml)).package.version;
       CARGO_BUILD_RUSTFLAGS = "-C debuginfo=0";
     };
 
@@ -27,16 +27,16 @@
         src = craneLib.cleanCargoSource ../.;
       });
   in {
-    checks.ponos-tests = craneLib.cargoTest (commonArgs
+    checks.ptah-tests = craneLib.cargoTest (commonArgs
       // {
-        src = config.ponosSrc;
+        src = config.ptahSrc;
         inherit cargoArtifacts;
-        # tests/analyze.rs runs the *real* luau-lsp through `ponos check`
+        # tests/analyze.rs runs the *real* luau-lsp through `ptah check`
         # (the embedded definitions under test) and discovers it via
-        # PATH; PONOS_REQUIRE_REAL_LSP makes its absence a hard failure
+        # PATH; PTAH_REQUIRE_REAL_LSP makes its absence a hard failure
         # here so the sandbox can never silently skip that contract.
         nativeBuildInputs = [pkgs.luau-lsp];
-        env.PONOS_REQUIRE_REAL_LSP = "1";
+        env.PTAH_REQUIRE_REAL_LSP = "1";
       });
 
     # `nix flake check` evaluates packages but does not build them, so a
@@ -46,27 +46,27 @@
     # the compile-time-embedded type definitions, and one bundled
     # example round-tripped through the in-repo mock agent (mirrors
     # tests/examples.rs; fully offline).
-    checks.ponos-smoke = pkgs.runCommand "ponos-smoke" {
-      nativeBuildInputs = [config.packages.ponos];
+    checks.ptah-smoke = pkgs.runCommand "ptah-smoke" {
+      nativeBuildInputs = [config.packages.ptah];
     } ''
       set -e
-      ponos --version
-      ponos --help > /dev/null
+      ptah --version
+      ptah --help > /dev/null
 
-      # The embedded definitions (include_str! of .ponos/ponos.d.luau in
+      # The embedded definitions (include_str! of .ptah/ptah.d.luau in
       # src/cli.rs) must actually be in the release binary.
-      ponos types | head -n1 | grep -q "type definitions"
+      ptah types | head -n1 | grep -q "type definitions"
 
       # End-to-end: run a bundled example against the mock agent with a
       # generated project registry, exactly like tests/examples.rs.
       work=$(mktemp -d)
-      mkdir -p "$work/.ponos"
-      cat > "$work/.ponos/config.toml" <<EOF
+      mkdir -p "$work/.ptah"
+      cat > "$work/.ptah/config.toml" <<EOF
       [agents.demo]
-      command = "${config.packages.ponos}/bin/mock-agent"
+      command = "${config.packages.ptah}/bin/mock-agent"
       args = []
       EOF
-      (cd "$work" && ponos run "${config.ponosSrc}/examples/fanout.luau") > /dev/null
+      (cd "$work" && ptah run "${config.ptahSrc}/examples/fanout.luau") > /dev/null
 
       touch $out
     '';
@@ -74,12 +74,12 @@
     # Static-analysis gate for the Luau surface: every bundled script
     # (examples, type-definition probe fixture) must pass luau-lsp in
     # strict mode (per-file --!strict directives; no committed .luaurc)
-    # against the repo definitions (.ponos/ponos.d.luau). Keeps examples
+    # against the repo definitions (.ptah/ptah.d.luau). Keeps examples
     # honest in the same direction as the runtime probe test.
-    checks.ponos-analyze = pkgs.stdenv.mkDerivation {
-      pname = "ponos-analyze";
+    checks.ptah-analyze = pkgs.stdenv.mkDerivation {
+      pname = "ptah-analyze";
       version = commonArgs.version;
-      src = config.ponosSrc;
+      src = config.ptahSrc;
 
       nativeBuildInputs = [pkgs.luau-lsp];
 
@@ -89,8 +89,8 @@
       checkPhase = ''
         runHook preCheck
         luau-lsp analyze --platform=standard \
-          --definitions=.ponos/ponos.d.luau \
-          examples/*.luau examples/*/*.luau crates/ponos-cli/tests/fixtures/*.luau
+          --definitions=.ptah/ptah.d.luau \
+          examples/*.luau examples/*/*.luau crates/ptah-cli/tests/fixtures/*.luau
         runHook postCheck
       '';
 

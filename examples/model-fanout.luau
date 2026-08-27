@@ -10,23 +10,23 @@
 -- session. Config option ids and value ids are agent-defined: inspect
 -- them at runtime with `s:configOptions()` (the mock agent used here
 -- offers a `model` select option and echoes the current value).
-local agent = ponos.agent("demo")
+local agent = ptah.agent("demo")
 
 local reviewer = agent:session({ id = "opus" })
 reviewer:setConfig("model", "opus")
 local summarizer = agent:session({ id = "haiku" })
 summarizer:setConfig("model", "haiku")
 
-local outcomes = ponos.parallel({ reviewer, summarizer }, function(s: Session)
+local outcomes = ptah.parallel({ reviewer, summarizer }, function(s: Session)
 	local r = s:prompt("Which model are you running under? One word.")
 	return ("%s → %s"):format(s:label(), tostring(r))
 end, { concurrency = 2 })
 
 for _, entry in ipairs(outcomes) do
 	if entry.ok then
-		ponos.log(entry.value)
+		ptah.log(entry.value)
 	else
-		ponos.log("FAILED: " .. entry.error)
+		ptah.log("FAILED: " .. entry.error)
 	end
 end
 

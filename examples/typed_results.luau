@@ -8,7 +8,7 @@ local schema = {
 	required = { "verdict", "score" },
 }
 
-local agent = ponos.agent("demo")
+local agent = ptah.agent("demo")
 local s = agent:session({ id = "reviewer", resultSchema = schema })
 
 -- Nil-check retry loop: a turn that ends without an accepted submission
@@ -22,9 +22,9 @@ for attempt = 1, 3 do
 		verdict = r.result
 		break
 	end
-	ponos.log(("attempt %d ended without a typed result; retrying"):format(attempt))
+	ptah.log(("attempt %d ended without a typed result; retrying"):format(attempt))
 end
 
 assert(verdict ~= nil, "no typed result after 3 attempts")
-ponos.log(("verdict=%s score=%d"):format(verdict.verdict, verdict.score))
+ptah.log(("verdict=%s score=%d"):format(verdict.verdict, verdict.score))
 s:close()

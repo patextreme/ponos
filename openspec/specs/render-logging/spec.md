@@ -2,15 +2,15 @@
 
 ## Purpose
 
-Defines the observability contract of ponos's streaming stdout log: what is
+Defines the observability contract of ptah's streaming stdout log: what is
 rendered for each prompt turn and tool call, how long or short those lines
-are, and which flags gate them. The render output is ponos's only log; this
+are, and which flags gate them. The render output is ptah's only log; this
 capability is what makes a multi-agent fan-out followable.
 
 ## Requirements
 
 ### Requirement: Prompt turns render a prompt line
-ponos SHALL render exactly one prompt line per prompt turn, at the moment the
+ptah SHALL render exactly one prompt line per prompt turn, at the moment the
 prompt is sent to the agent, attributed to the sending session's label. The
 line SHALL consist of the prefix `prompt: ` followed by the prompt text with
 runs of whitespace collapsed to single spaces, truncated to a visible-char
@@ -27,7 +27,7 @@ under default flags on every session and SHALL be suppressed by `--quiet`.
 - **THEN** the prompt line shows the first budget's worth of collapsed text followed by `…` and no more
 
 #### Scenario: Quiet suppresses the prompt line
-- **WHEN** ponos runs with `--quiet` and a session is prompted
+- **WHEN** ptah runs with `--quiet` and a session is prompted
 - **THEN** no prompt line is rendered
 
 ### Requirement: Tool lines carry an input peek
@@ -85,7 +85,7 @@ not under the session cwd, and otherwise as received.
 - **THEN** the path renders as `/tmp/build.log`
 
 ### Requirement: Rendered lines carry a full date timestamp
-Every rendered line (session-attributed and `ponos` lines alike) SHALL be
+Every rendered line (session-attributed and `ptah` lines alike) SHALL be
 prefixed with a local timestamp shaped `yyyy-mm-dd HH:MM:SS` (space-separated).
 The date SHALL appear on every line, not as a session banner.
 
@@ -94,22 +94,16 @@ The date SHALL appear on every line, not as a session banner.
 - **THEN** the line begins with a `yyyy-mm-dd HH:MM:SS` local timestamp before the `[label]` prefix
 
 ### Requirement: Exec lines render command and outcome
-The renderer SHALL render one line when an exec starts (carrying the command
-string) and one line when it ends (carrying the exit code and duration, or the
-timeout/spawn-failure marker), using the same timestamped line format as session
-lines but attributed so they read as script activity rather than a named
-session. Captured child stdout/stderr SHALL NOT be rendered. `--quiet` SHALL
-suppress exec lines entirely (they are session-event-like, not `ponos.log`
-script logs).
+The renderer SHALL render one line when an exec starts (carrying the command string) and one line when it ends (carrying the exit code and duration, or the timeout/spawn-failure marker), using the same timestamped line format as session lines but attributed so they read as script activity rather than a named session. Captured child stdout/stderr SHALL NOT be rendered. `--quiet` SHALL suppress exec lines entirely (they are session-event-like, not `ptah.log` script logs).
 
 #### Scenario: Color mode shows both lines
-- **WHEN** a script calls `ponos.exec("printf hi")` in default (color) output mode
+- **WHEN** a script calls `ptah.exec("printf hi")` in default (color) output mode
 - **THEN** the terminal shows a start line containing the command `printf hi` and an end line containing exit code 0 and a duration, interleaved at the moment each fires
 
 #### Scenario: Quiet suppresses exec lines
 - **WHEN** the same script runs with `--quiet`
-- **THEN** no exec lines are printed; a `ponos.log` call from the script still prints
+- **THEN** no exec lines are printed; a `ptah.log` call from the script still prints
 
 #### Scenario: Failed exec end line carries the code
-- **WHEN** a script calls `ponos.exec("sh -c 'exit 4'")` in color mode
+- **WHEN** a script calls `ptah.exec("sh -c 'exit 4'")` in color mode
 - **THEN** the end line shows exit code 4 (and the run continues; the failure is not a render error)

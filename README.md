@@ -1,31 +1,30 @@
-# ponos
+# ptah
 
-> **Name origin:** *Ponos* (Πόνος) is the Greek spirit of toil, labor, and
-> drudgery. Nothing here escapes that fate: `ponos` turns the mechanical task
-> of driving AI agents into plain, scripted code — the runtime does the heavy
-> lifting, and your agents carry the load.
+> **Name origin:** *Ptah* is the Egyptian god of craftsmen and architects —
+> the master builder who shaped the world by thinking it, then speaking it
+> into being.
 
 Luau-scripted multi-agent orchestration over the
 [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
 
-`ponos run script.luau` executes a small, versionable Luau script that drives
+`ptah run script.luau` executes a small, versionable Luau script that drives
 any ACP-speaking agent (Claude Code, Gemini CLI, Codex, …) over stdio.
 Scripts look synchronous — `reply = session:prompt("…")` blocks the script,
 not the runtime — so fan-outs, pipelines and watchdogs read like plain code.
 
 ```lua
 --!strict
-local claude = ponos.agent("claude")
+local claude = ptah.agent("claude")
 local s = claude:session({ id = "reviewer" })
 local r = s:prompt("Review src/main.rs for obvious bugs; be terse.")
-ponos.log(tostring(r))       -- r.text; r.stopReason; r.usage.input …
+ptah.log(tostring(r))       -- r.text; r.stopReason; r.usage.input …
 s:close()
 ```
 
 Fan out over many targets with a concurrency cap:
 
 ```lua
-local outcomes = ponos.parallel(targets, function(t)
+local outcomes = ptah.parallel(targets, function(t)
     local s = claude:session()
     local r = s:prompt("Summarize " .. t)
     s:close()
@@ -40,7 +39,7 @@ the concurrency cap then bounds concurrent agent subprocesses.
 ## Install / build
 
 ```sh
-nix build              # produces bin/ponos (crane, pinned nightly toolchain)
+nix build              # produces bin/ptah (crane, pinned nightly toolchain)
 nix develop            # dev shell with the pinned toolchain
 cargo build            # plain cargo works too
 cargo test             # full suite; integration tests use the mock agent only
@@ -49,24 +48,24 @@ cargo test             # full suite; integration tests use the mock agent only
 ## CLI
 
 ```
-ponos run <script.luau> [--quiet] [--verbose] [-vv] [--no-color]
-ponos check <script.luau> [--no-color]
-ponos types
-ponos --version
+ptah run <script.luau> [--quiet] [--verbose] [-vv] [--no-color]
+ptah check <script.luau> [--no-color]
+ptah types
+ptah --version
 ```
 
 - `--quiet` — suppress streaming render and diagnostics (script `print` still passes)
 - `--verbose` — runtime lifecycle diagnostics
 - `-vv` — additionally pass agent subprocess stderr through
 - `--no-color` — drop ANSI colors, keep `[agent/session]` text prefixes
-- `ponos types` — print the Luau type definitions for the script API
+- `ptah types` — print the Luau type definitions for the script API
   (see [Editor setup](#editor-setup)); needs no registry, script, or agents
 
 Exit codes: `0` on success, `1` on an uncaught script error or a never-observed
 task error (printed to stderr), `2` on CLI/usage errors, `n` when the script
-calls `ponos.exit(n)`, and `130`/`143` when the run is cancelled by SIGINT/
+calls `ptah.exit(n)`, and `130`/`143` when the run is cancelled by SIGINT/
 SIGTERM (teardown — including killing in-flight exec children — runs before
-the exit). For `ponos check`, `1` means findings and `2` also covers
+the exit). For `ptah check`, `1` means findings and `2` also covers
 "check could not run" (see [Checking scripts](#checking-scripts)).
 
 ## Output format
@@ -80,7 +79,7 @@ local wall-clock timestamp and the session attribution:
 2026-08-25 21:07:36 [claude/reviewer] tool: bash git status (completed, 2.9s)
 2026-08-25 21:07:37 [claude/reviewer] tool: read src/render/mod.rs:118
 2026-08-25 21:07:41 [claude/reviewer] Looks fine — two nits below.
-2026-08-25 21:07:41 [ponos] log line from ponos.log
+2026-08-25 21:07:41 [ptah] log line from ptah.log
 ```
 
 - Timestamps are always on (no flag): local `yyyy-mm-dd HH:MM:SS`, dimmed
@@ -110,24 +109,24 @@ local wall-clock timestamp and the session attribution:
 
 ## Agent registry
 
-Agents are configured in TOML. Project entries (`.ponos/config.toml`, found
+Agents are configured in TOML. Project entries (`.ptah/config.toml`, found
 upward from the invocation directory) override user entries
-(`~/.config/ponos/config.toml`) per agent name:
+(`~/.config/ptah/config.toml`) per agent name:
 
 ```toml
-# ~/.config/ponos/config.toml
+# ~/.config/ptah/config.toml
 [agents.claude]
 command = "npx"
 args = ["-y", "@agentclientprotocol/claude-agent-acp@latest"]
 env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }
 ```
 
-`${VAR}` interpolates from ponos's environment at resolve time (unset →
+`${VAR}` interpolates from ptah's environment at resolve time (unset →
 empty); `env` values are merged over the inherited environment. Scripts can
 also pass an inline spec and skip the registry entirely:
 
 ```lua
-local codex = ponos.agent({
+local codex = ptah.agent({
     command = "npx",
     args = { "-y", "@agentclientprotocol/codex-acp@latest" },
 })
@@ -153,35 +152,35 @@ ANTHROPIC_SMALL_FAST_MODEL = "glm-4.5-air"
 
 ## Permissions (headless posture)
 
-`ponos` runs headless — nobody is there to be asked — so it answers every
+`ptah` runs headless — nobody is there to be asked — so it answers every
 `session/request_permission` by selecting an allow option the agent offered:
 the first `AllowAlways` when one is offered, otherwise the first other
 allow option (e.g. `AllowOnce`). A denied tool silently degrades output, so
 allowing is the sane default for scripted runs; note that choosing
 `AllowAlways` may persist an allow rule in the agent's own configuration
 beyond the run (usually desirable for CI). When an offer contains no allow
-option at all, ponos responds with an unsupported-method error. Everything
+option at all, ptah responds with an unsupported-method error. Everything
 else agents may ask of a client — file access, terminal control,
 elicitation — is answered with a JSON-RPC method-not-found error, so turns
 never hang.
 
-## The `ponos` namespace
+## The `ptah` namespace
 
 | API | Description |
 | --- | --- |
-| `ponos.agent(name_or_spec)` | Agent factory (registry name or inline `{command=, args=, env=}` spec) |
+| `ptah.agent(name_or_spec)` | Agent factory (registry name or inline `{command=, args=, env=}` spec) |
 | `agent:session({id=, cwd=, mcpServers=, resultSchema=})` | New session (own subprocess); `id` defaults to `s1, s2, …`; `resultSchema` declares a typed-result contract (see below); session config options are applied with `setConfig` after creation (see below) |
 | `session:prompt(text, {timeoutMs=})` | One turn → `{ text, stopReason, usage, result }` (`result` is the turn's typed-result value, `nil` without one; `__tostring` → text; `text` is the turn's last agent message — see below); concurrent `prompt` calls on one session queue behind the in-flight turn |
 | `session:cancel()` | Cancels the in-flight turn (returns `stopReason = "cancelled"`) |
 | `session:close()` | Ends the session and reaps the agent process |
 | `session:configOptions()` | Live per-session config options (empty table when the agent offers none) |
 | `session:setConfig(id, value)` | Set a config option between turns — string (select choice id) or boolean value; raises on agent rejection |
-| `ponos.spawn(fn)` → `task:await()` | Concurrent task; errors re-raise at the await site |
-| `ponos.join({task, …})` | Wait for tasks → per-task `{ok, value}` / `{ok=false, error}` entries |
-| `ponos.parallel(items, fn, {concurrency=})` | Parallel fan-out (default unlimited) → per-item outcome entries in item order |
-| `ponos.exec(cmd, {timeoutMs=})` | Run a shell command via `/bin/sh -c` → `{ exitCode, stdout, stderr }` (any exit code is data; only could-not-run and timeout raise — see below) |
-| `ponos.json.parse(s)` / `ponos.json.stringify(v, {indent=})` | Pure JSON decode (`null` → `nil`, raises on malformed input) / encode (string keys only) |
-| `ponos.sleep(ms)` / `ponos.log(msg)` / `ponos.exit(code)` / `ponos.version` | Runtime helpers |
+| `ptah.spawn(fn)` → `task:await()` | Concurrent task; errors re-raise at the await site |
+| `ptah.join({task, …})` | Wait for tasks → per-task `{ok, value}` / `{ok=false, error}` entries |
+| `ptah.parallel(items, fn, {concurrency=})` | Parallel fan-out (default unlimited) → per-item outcome entries in item order |
+| `ptah.exec(cmd, {timeoutMs=})` | Run a shell command via `/bin/sh -c` → `{ exitCode, stdout, stderr }` (any exit code is data; only could-not-run and timeout raise — see below) |
+| `ptah.json.parse(s)` / `ptah.json.stringify(v, {indent=})` | Pure JSON decode (`null` → `nil`, raises on malformed input) / encode (string keys only) |
+| `ptah.sleep(ms)` / `ptah.log(msg)` / `ptah.exit(code)` / `ptah.version` | Runtime helpers |
 
 ### Prompt text
 
@@ -201,13 +200,13 @@ session.
 ### Typed results
 
 `agent:session({ resultSchema = <schema> })` declares a typed result
-contract: a JSON Schema as a plain Luau table. ponos then
+contract: a JSON Schema as a plain Luau table. ptah then
 
-- injects one extra MCP server into the agent's session, named `ponos`,
+- injects one extra MCP server into the agent's session, named `ptah`,
   exposing a single tool `result_submit` (agents that derive tool names
-  call it `mcp__ponos__result_submit`). The declared schema travels in the
+  call it `mcp__ptah__result_submit`). The declared schema travels in the
   tool's `value` argument — it never enters prompt text;
-- sends every prompt verbatim (ponos never appends to or otherwise
+- sends every prompt verbatim (ptah never appends to or otherwise
   modifies the script's prompt text); the submit guidance — when to call
   and how the result is passed — lives in the `result_submit` tool
   description, which the agent discovers through normal tool listing.
@@ -225,7 +224,7 @@ empty slot; cancelled and timed-out turns discard what they had gathered.
 
 ```lua
 --!strict
-local agent = ponos.agent("claude")
+local agent = ptah.agent("claude")
 local s = agent:session({
     id = "reviewer",
     resultSchema = {
@@ -241,10 +240,10 @@ local s = agent:session({
 for attempt = 1, 3 do
     local r = s:prompt("Review the diff; be terse.")
     if r.result ~= nil then
-        ponos.log(("%s (%d/10)"):format(r.result.verdict, r.result.score))
+        ptah.log(("%s (%d/10)"):format(r.result.verdict, r.result.score))
         break
     end
-    ponos.log("no typed result; retrying")
+    ptah.log("no typed result; retrying")
 end
 s:close()
 ```
@@ -263,7 +262,7 @@ JSON `null` in a submitted value arrives as `nil` (an explicitly submitted
 `null` is indistinguishable from no submission).
 
 **Degradation is designed, not exceptional.** Agents are free to ignore
-suggested MCP servers, and sandboxes may block spawning the ponos binary.
+suggested MCP servers, and sandboxes may block spawning the ptah binary.
 In every such case prompts complete normally with `result = nil`, plus one
 lifecycle log line (`--verbose`) noting the session ran without typed
 results. Never an error, never a hang. Scripts that must have a value
@@ -281,27 +280,27 @@ only `yield` remains visible because the embedded async runtime needs it;
 the scheduling primitives are absent.)
 
 The ambient globals expose no subprocess execution: world access arrives
-through capabilities injected at the composition root. `ponos.exec` is
+through capabilities injected at the composition root. `ptah.exec` is
 that door for the shell — implemented by a tokio runner the CLI always
 injects (there is no gating flag or config switch, because running a
-ponos script already implies arbitrary shell through the headless
+ptah script already implies arbitrary shell through the headless
 allow-all agent posture; the injection seam exists so embedders of the
 scripting runtime get a clean "no runner injected" error instead of an
 ambient shell).
 
-### Running shell commands: `ponos.exec`
+### Running shell commands: `ptah.exec`
 
 Between agent turns there is deterministic work — list PRs, run a build,
-format files. `ponos.exec(cmd, opts)` runs it inside the script and hands
+format files. `ptah.exec(cmd, opts)` runs it inside the script and hands
 the result back as data, so probabilistic agent steps and deterministic
 pipeline steps compose:
 
 ```lua
 --!strict
-local r = ponos.exec("gh pr list --json number,title --limit 20")
-local prs = ponos.json.parse(r.stdout)
+local r = ptah.exec("gh pr list --json number,title --limit 20")
+local prs = ptah.json.parse(r.stdout)
 for _, pr in ipairs(prs) do
-    ponos.log(("#%d %s"):format(pr.number, pr.title))
+    ptah.log(("#%d %s"):format(pr.number, pr.title))
 end
 ```
 
@@ -325,16 +324,16 @@ The contract:
  tasks and other sessions keep progressing (exec joins no `parallel`/
  `spawn` composition). No `timeoutMs` means no budget — the call waits
  for the command to exit, bounded only by outer cancellation.
-- **The child inherits ponos's environment and working directory**;
+- **The child inherits ptah's environment and working directory**;
  there are no `cwd`/`env` override options in v1. **Stdin is closed**
  (`/dev/null`): exec is non-interactive — a child that prompts fails
  fast on EOF instead of hanging or touching your terminal.
 - **Captured output is yours**: nothing streams to the terminal; each
  exec renders one start line (the command) and one end line (exit code
- + duration, or a timeout/failed-to-run marker) as `[ponos] exec: …`
+ + duration, or a timeout/failed-to-run marker) as `[ptah] exec: …`
  script-activity lines, suppressed by `--quiet` like all rendered
  output.
-- **Teardown is guaranteed**: a script error, `ponos.exit`, or run
+- **Teardown is guaranteed**: a script error, `ptah.exit`, or run
  cancellation (Ctrl-C: the first SIGINT/SIGTERM runs the same teardown
  and exits `128+signal`; a second signal exits immediately) kills every
  in-flight command's process group — no orphaned children outlive the
@@ -344,7 +343,7 @@ The session id `exec` is reserved (it attributes exec lifecycle lines at
 the event sink): `agent:session({ id = "exec" })` is rejected at
 session-options validation with a clear error — choose another id.
 
-`ponos.json` exists for exactly this pattern: `parse(s)` decodes captured
+`ptah.json` exists for exactly this pattern: `parse(s)` decodes captured
  command output into Luau data (arrays as 1..n tables, objects as
  string-keyed tables, `null` as `nil`; malformed input raises),
  `stringify(v, { indent = n })` encodes compactly or with `n`-space
@@ -353,21 +352,21 @@ session-options validation with a clear error — choose another id.
 ### Per-session config (models and more)
 
 Agents increasingly expose per-session configuration — above all the model
-— through ACP session config options. ponos advertises the
+— through ACP session config options. ptah advertises the
 `session.configOptions` client capability (its only declared capability;
 nothing interactive), captures the options each `session/new` response
 advertises, and keeps them live as the agent pushes changes:
 
 ```lua
 --!strict
-local claude = ponos.agent("claude")
+local claude = ptah.agent("claude")
 local opus = claude:session({ id = "reviewer" })
 opus:setConfig("model", "claude-opus-4-5") -- before the first prompt
 local haiku = claude:session({ id = "summarizer" })
 haiku:setConfig("model", "claude-haiku-4-5")
 
 for _, option in ipairs(opus:configOptions()) do
-    ponos.log(("%s = %s"):format(option.id, tostring(option.currentValue)))
+    ptah.log(("%s = %s"):format(option.id, tostring(option.currentValue)))
 end
 
 haiku:setConfig("model", "claude-opus-4-5") -- between turns
@@ -421,11 +420,11 @@ sets and agent-pushed changes each render one lifecycle line
 
 ## Checking scripts
 
-`ponos check` verifies a script **without executing it** — no top-level
+`ptah check` verifies a script **without executing it** — no top-level
 code runs, no required module loads, no agent subprocess spawns:
 
 ```sh
-ponos check my_script.luau
+ptah check my_script.luau
 ```
 
 Three passes run, findings are collected together (never fail-fast), and
@@ -437,8 +436,8 @@ followed by a summary line (`--no-color` drops the ANSI coloring):
    line number; module-level syntax errors surface in the next pass.
 2. **Static lints** — a full-moon AST walk over the entry and every file
    reachable through literal `require("...")` string arguments:
-   unknown literal `ponos.agent("name")` names against the discovered
-   registry; literal require targets that don't resolve under ponos's
+   unknown literal `ptah.agent("name")` names against the discovered
+   registry; literal require targets that don't resolve under ptah's
    rules (`.luau`/`.lua`/`init.luau`, relative to the requiring file); and a
    missing leading `--!strict` directive in the entry or any reachable
    file. Computed require paths, computed agent names, and inline agent
@@ -454,7 +453,7 @@ errors; warnings like `LocalUnused` don't fail) · `2` the check could not
 run (missing/unreadable script, registry discovery failure, luau-lsp
 absent).
 
-`ponos run` also pre-flights every script in-process (compile + literal
+`ptah run` also pre-flights every script in-process (compile + literal
 require + literal agent-name lints — no strictness enforcement, no
 luau-lsp) and fails the run with exit 1 before the first agent spawns.
 Scripts using computed require paths or agent names run exactly as
@@ -466,23 +465,23 @@ require.
 
 Scripts get completion, hover, and type checking — plus sandbox violations
 flagged before a run — by pointing [luau-lsp](https://github.com/luau-lsp/luau-lsp)
-at ponos's type definitions:
+at ptah's type definitions:
 
 ```sh
-ponos types > ponos.d.luau
+ptah types > ptah.d.luau
 ```
 
-`ponos types` emits definitions version-matched to the installed binary: a
-`-- ponos <version> type definitions` header followed by the file
+`ptah types` emits definitions version-matched to the installed binary: a
+`-- ptah <version> type definitions` header followed by the file
 byte-for-byte. Start scripts with `--!strict` for full checking (the
 [bundled examples](examples/) do). The definitions also model the sandbox —
 `os` trimmed to `time`/`clock`, `coroutine` to `yield`, and
 `loadstring`/`collectgarbage` unavailable — so editor-approved code cannot
 reach a global the runtime poisons. Definitions apply workspace-wide, so
-keep them out of mixed Luau projects you don't run under ponos.
+keep them out of mixed Luau projects you don't run under ptah.
 
 Helix needs no per-user setup: the repo ships `.helix/languages.toml`,
-which points luau-lsp at `.ponos/ponos.d.luau` (standard platform) for
+which points luau-lsp at `.ptah/ptah.d.luau` (standard platform) for
 any file in this workspace. Other editors — configure your own (VS Code
 luau-lsp extension settings; "standard" platform, not
 Roblox):
@@ -490,7 +489,7 @@ Roblox):
 ```jsonc
 {
   "luau-lsp.platform.type": "standard",
-  "luau-lsp.types.definitionFiles": ["ponos.d.luau"]
+  "luau-lsp.types.definitionFiles": ["ptah.d.luau"]
 }
 ```
 
@@ -501,7 +500,7 @@ require("lspconfig").luau_lsp.setup({
   settings = {
     ["luau-lsp"] = {
       platform = { type = "standard" },
-      types = { definitionFiles = { "ponos.d.luau" } },
+      types = { definitionFiles = { "ptah.d.luau" } },
     },
   },
 })
@@ -509,7 +508,7 @@ require("lspconfig").luau_lsp.setup({
 
 Known residuals of the definitions (none affect execution):
 
-- generic `ponos.parallel` callbacks occasionally need an explicit parameter
+- generic `ptah.parallel` callbacks occasionally need an explicit parameter
   annotation (`function(item: string) …`) for the item type to propagate;
 - the `tostring(r)` prompt-result sugar is not covered by the definitions —
   use `r.text` where the type checker wants a string;
@@ -521,7 +520,7 @@ Known residuals of the definitions (none affect execution):
   hand; a `config` key is the removed constructor option and is rejected
   at runtime, pre-spawn.
 
-Relative requires carry no residual: luau-lsp and ponos resolve them
+Relative requires carry no residual: luau-lsp and ptah resolve them
 identically — from the requiring file, with no directory boundary.
 
 ## Examples
@@ -533,18 +532,18 @@ agent turn), and two sibling workflows sharing a helper through a
 cross-tree require — and run them against the bundled mock agent:
 
 ```sh
-mkdir -p .ponos
-cat > .ponos/config.toml <<'EOF'
+mkdir -p .ptah
+cat > .ptah/config.toml <<'EOF'
 [agents.demo]
 command = "target/debug/mock-agent"
 args = []
 EOF
-ponos run examples/sequential_review.luau
+ptah run examples/sequential_review.luau
 ```
 
 ## Development
 
-- `crates/ponos-cli/src/bin/mock-agent/` — a scriptable ACP agent (with an MCP client for
+- `crates/ptah-cli/src/bin/mock-agent/` — a scriptable ACP agent (with an MCP client for
   suggested servers) used by the offline test suite (`MOCK_CHUNKS`,
   `MOCK_HANG`, `MOCK_PERMISSION` (`once`/`always`/`reject`), `MOCK_TOOL`,
   `MOCK_TOOL_FLOW` (status-sequence replay), `MOCK_PLAN`, `MOCK_USAGE`,

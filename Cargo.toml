@@ -11,7 +11,7 @@ agent-client-protocol = { version = "1.3", features = ["unstable_end_turn_token_
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
 mlua = { version = "0.12", features = ["luau", "async", "serialize"] }
-# Pure-Rust Luau parser (AST walk for `ponos check`'s static lints and the
+# Pure-Rust Luau parser (AST walk for `ptah check`'s static lints and the
 # `run` pre-flight; no execution, no serde needed). `luau` feature tracks
 # Luau syntax, matching the luau0-src revision mlua builds on.
 full-moon = { package = "full_moon", version = "2.2", features = ["luau"] }
@@ -23,7 +23,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 async-process = "2"
-# MCP server+client used by the typed-results bridge (`ponos __bridge`)
+# MCP server+client used by the typed-results bridge (`ptah __bridge`)
 # and by mock-agent's MCP client. IO + child-process transports only: no
 # HTTP, no auth, no client-side SSE.
 rmcp = { version = "3", features = ["client", "transport-io", "transport-child-process"] }
