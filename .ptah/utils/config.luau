@@ -7,7 +7,7 @@ export type Config = {
 }
 
 return {
-	defaultModel = "zai/glm-5.3",
+	defaultModel = "zai-custom/glm-5.3-flash",
 	judgeModel = "qwencloud/deepseek-v4-flash-0731",
-	changeName = "add-shell-exec",
+	changeName = "rename-to-ptah",
 } :: Config
