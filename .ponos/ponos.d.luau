@@ -111,6 +111,31 @@ export type ParallelOptions = {
 	concurrency: number?,
 }
 
+-- Options for `ponos.exec(cmd, …)`: `timeoutMs` absent or nil means no
+-- budget (bounded only by outer cancellation).
+export type ExecOptions = {
+	timeoutMs: number?,
+}
+
+-- Result of `ponos.exec(cmd)`. Any exit code is data — `exitCode` is a
+-- number even when the command failed (a signal death maps to the
+-- shell's `128 + signal` convention); only could-not-run and timeout
+-- raise.
+export type ExecResult = {
+	exitCode: number,
+	stdout: string,
+	stderr: string,
+}
+
+-- Pure JSON module (`ponos.json`): turns captured command output into
+-- script data and back. `parse` raises on malformed input; JSON `null`
+-- decodes to nil. `stringify` rejects non-string table keys (arrays use
+-- consecutive 1..n indexes).
+export type Json = {
+	parse: (s: string) -> any,
+	stringify: (value: any, opts: { indent: number? }?) -> string,
+}
+
 -- Per-item outcome of `ponos.parallel` / `ponos.join`: narrow on
 -- `entry.ok` (bind the entry to a local first) to reach `value` or `error`.
 export type Outcome<T> = {
@@ -152,6 +177,8 @@ declare ponos: {
 	spawn: <T>(f: () -> T) -> Task<T>,
 	join: <T>(tasks: { Task<T> }) -> { Outcome<T> },
 	parallel: <T, U>(items: { T }, fn: (item: T) -> U, opts: ParallelOptions?) -> { Outcome<U> },
+	exec: (cmd: string, opts: ExecOptions?) -> ExecResult,
+	json: Json,
 	sleep: (ms: number) -> (),
 	log: (msg: string) -> (),
 	exit: (code: number?) -> (),

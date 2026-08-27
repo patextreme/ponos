@@ -32,6 +32,18 @@ pub enum SessionEvent {
     /// Runtime lifecycle diagnostic (session readiness, config changes,
     /// typed-result setup, teardown notes).
     Lifecycle { message: String },
+    /// A `ponos.exec` command started. Attributed to the script (the
+    /// sink's reserved `"exec"` pseudo-label), not to any session.
+    ExecStart { command: String },
+    /// A `ponos.exec` command ended: its exit code (or, with `None`, a
+    /// timeout/spawn-failure marker — `timed_out` discriminates) and
+    /// wall-clock duration.
+    ExecEnd {
+        command: String,
+        exit_code: Option<i32>,
+        timed_out: bool,
+        duration_ms: u64,
+    },
     /// The verdict for one typed-result submission. `late` marks a
     /// structurally valid submission that arrived with no turn in flight
     /// (dropped, not an error).

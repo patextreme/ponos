@@ -35,6 +35,69 @@ pub fn strip_timestamp(line: &str) -> &str {
     if is_ts { &line[20..] } else { line }
 }
 
+/// Count live processes whose `/proc` cmdline contains `needle`. The
+/// suite tags test sleeps with unique argv values, so a needle like
+/// `"9871"` matches exactly the processes a test cares about.
+pub fn count_processes(needle: &str) -> usize {
+    let mut n = 0;
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        if raw
+            .split(|b| *b == 0)
+            .any(|arg| std::str::from_utf8(arg).is_ok_and(|s| s.contains(needle)))
+        {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// SIGKILL every live process whose `/proc` cmdline contains `needle`
+/// (same match rule as [`count_processes`]). For sweeping orphans a
+/// previously failed test run may have left under a stable tag, so the
+/// next run's no-orphan assertion is about *its own* processes — never
+/// for anything the current run still owns.
+pub fn kill_processes(needle: &str) {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let hit = raw
+            .split(|b| *b == 0)
+            .any(|arg| std::str::from_utf8(arg).is_ok_and(|s| s.contains(needle)));
+        if hit
+            && let Some(name) = entry.file_name().to_str()
+            && let Ok(pid) = name.parse::<i32>()
+        {
+            // SAFETY: a plain SIGKILL to a pid we just observed.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
+/// Poll `count_processes` until it reaches `want` (up to 5s), else
+/// panic naming `what` — the suite's "no orphans" witness.
+pub fn wait_for_processes(needle: &str, want: usize, what: &str) {
+    for _ in 0..250 {
+        if count_processes(needle) == want {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!(
+        "expected {what} (count {want}) for processes tagged {needle:?}, got {}",
+        count_processes(needle)
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

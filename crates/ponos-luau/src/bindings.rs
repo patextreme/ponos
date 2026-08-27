@@ -19,10 +19,11 @@ use agent_client_protocol::schema::v1::{
 use ponos_core::config::AgentSpec;
 use ponos_core::error::ExitSignal;
 use ponos_core::events::SessionEvent;
+use ponos_core::ports::ExecError;
 use ponos_core::session::{SessionHandle, SessionOptions};
 use ponos_core::task::{self, TaskState};
 
-use super::state::runtime_state;
+use super::state::{EXEC_LABEL, ExecEntry, runtime_state};
 
 fn new_task_obj(lua: &Lua, state: Rc<TaskState>) -> mlua::Result<Table> {
     let t = lua.create_table()?;
@@ -254,6 +255,16 @@ fn new_agent_factory(lua: &Lua, name: String, spec: AgentSpec) -> mlua::Result<T
                 };
 
                 let id: Option<String> = opts.get("id")?;
+                // `exec` is the sink's reserved pseudo-label for
+                // script-level exec lifecycle events; a user session id
+                // of `exec` would make script activity render (and
+                // future TUI-track) as a session. Reserved forever.
+                if id.as_deref() == Some(crate::state::EXEC_LABEL) {
+                    return Err(mlua::Error::runtime(
+                        "session id `exec` is reserved for exec lifecycle \
+                         attribution — choose another id",
+                    ));
+                }
                 let n = counter.get() + 1;
                 counter.set(n);
                 let id = id.unwrap_or_else(|| format!("s{n}"));
@@ -482,6 +493,160 @@ pub(super) fn bind_ponos(lua: &Lua) -> mlua::Result<()> {
         Ok(())
     })?;
     ponos.set("log", log)?;
+
+    // ponos.exec(cmd, opts?) — run a shell command through the injected
+    // ProcessRunner capability (blocking the calling coroutine; spawned
+    // tasks and other turns keep progressing). Nonzero exit is data;
+    // only could-not-run and timeout raise.
+    let exec =
+        lua.create_async_function(|lua, (cmd, opts): (String, Option<Value>)| async move {
+            let state = runtime_state(&lua)?;
+            let timeout_ms = match opts {
+                None | Some(Value::Nil) => None,
+                Some(Value::Table(t)) => t.get::<Option<u64>>("timeoutMs")?,
+                Some(other) => {
+                    return Err(mlua::Error::runtime(format!(
+                        "ponos.exec: opts must be a table ({{ timeoutMs = 100 }}), got {}",
+                        other.type_name()
+                    )));
+                }
+            };
+            let runner = state.process_runner.clone().ok_or_else(|| {
+                mlua::Error::runtime("ponos.exec: no process runner injected into this runtime")
+            })?;
+
+            state.sink.emit(
+                EXEC_LABEL,
+                SessionEvent::ExecStart {
+                    command: cmd.clone(),
+                },
+            );
+            // In-flight registration: teardown signals `cancel` so this
+            // future (not just the Lua runtime) drops now — and dropping
+            // the port future is the runner's kill-the-group contract.
+            // A teardown that already fired shows up as `killed` here
+            // (checked before the future is ever polled, so the child
+            // never spawns).
+            let entry = Rc::new(ExecEntry::default());
+            state.execs.borrow_mut().push(entry.clone());
+            let started = std::time::Instant::now();
+            let fut = runner.run(&cmd, timeout_ms);
+            let outcome = if entry.killed.get() {
+                None
+            } else {
+                tokio::select! {
+                    _ = entry.cancel.notified() => None,
+                    out = fut => Some(out),
+                }
+            };
+            state.execs.borrow_mut().retain(|e| !Rc::ptr_eq(e, &entry));
+            let Some(outcome) = outcome else {
+                return Err(mlua::Error::runtime(format!(
+                    "exec `{cmd}` cancelled: the run is ending"
+                )));
+            };
+            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+            let outcome = match outcome {
+                Ok(o) => o,
+                Err(e @ ExecError::Spawn(_)) => {
+                    state.sink.emit(
+                        EXEC_LABEL,
+                        SessionEvent::ExecEnd {
+                            command: cmd.clone(),
+                            exit_code: None,
+                            timed_out: false,
+                            duration_ms,
+                        },
+                    );
+                    return Err(mlua::Error::runtime(format!("ponos.exec: {e}")));
+                }
+            };
+            if outcome.timed_out {
+                state.sink.emit(
+                    EXEC_LABEL,
+                    SessionEvent::ExecEnd {
+                        command: cmd.clone(),
+                        exit_code: None,
+                        timed_out: true,
+                        duration_ms,
+                    },
+                );
+                let budget = timeout_ms
+                    .map(|ms| format!(" after {ms}ms"))
+                    .unwrap_or_default();
+                return Err(mlua::Error::runtime(format!(
+                    "ponos.exec `{cmd}` timed out{budget}"
+                )));
+            }
+            state.sink.emit(
+                EXEC_LABEL,
+                SessionEvent::ExecEnd {
+                    command: cmd.clone(),
+                    exit_code: outcome.exit_code,
+                    timed_out: false,
+                    duration_ms,
+                },
+            );
+
+            let result = lua.create_table()?;
+            result.set("exitCode", outcome.exit_code.unwrap_or(-1))?;
+            result.set("stdout", outcome.stdout)?;
+            result.set("stderr", outcome.stderr)?;
+            Ok(result)
+        })?;
+    ponos.set("exec", exec)?;
+
+    // ponos.json — pure JSON encode/decode (no port, no I/O): turns
+    // captured command output into script data and back.
+    let json = lua.create_table()?;
+    json.set(
+        "parse",
+        lua.create_function(|lua, s: String| {
+            let v: serde_json::Value = serde_json::from_str(&s)
+                .map_err(|e| mlua::Error::runtime(format!("ponos.json.parse: {e}")))?;
+            Ok(lua.to_value_with(
+                &v,
+                mlua::serde::ser::Options::new()
+                    .serialize_none_to_null(false)
+                    .serialize_unit_to_null(false),
+            ))
+        })?,
+    )?;
+    json.set(
+        "stringify",
+        lua.create_function(|lua, (value, opts): (Value, Option<Table>)| {
+            let json: serde_json::Value = lua.from_value(value).map_err(|e| {
+                mlua::Error::runtime(format!(
+                    "ponos.json.stringify: value is not JSON-shaped — JSON objects have \
+                     string keys and arrays use consecutive 1..n indexes: {e}"
+                ))
+            })?;
+            let indent: Option<usize> = match &opts {
+                Some(t) => t.get("indent")?,
+                None => None,
+            };
+            let encoded = match indent {
+                None => serde_json::to_string(&json)
+                    .map_err(|e| mlua::Error::runtime(format!("ponos.json.stringify: {e}")))?,
+                Some(n) => {
+                    let n = n.clamp(1, 16);
+                    let spaces = vec![b' '; n];
+                    let mut out = Vec::new();
+                    let mut ser = serde_json::Serializer::with_formatter(
+                        &mut out,
+                        serde_json::ser::PrettyFormatter::with_indent(&spaces),
+                    );
+                    serde::Serialize::serialize(&json, &mut ser)
+                        .map_err(|e| mlua::Error::runtime(format!("ponos.json.stringify: {e}")))?;
+                    String::from_utf8(out)
+                        .map_err(|e| mlua::Error::runtime(format!("ponos.json.stringify: {e}")))?
+                }
+            };
+            Ok(encoded)
+        })?,
+    )?;
+    ponos.set("json", json)?;
 
     // ponos.exit(code)
     let exit = lua.create_function(|lua, code: Option<i32>| {

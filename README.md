@@ -63,8 +63,10 @@ ponos --version
   (see [Editor setup](#editor-setup)); needs no registry, script, or agents
 
 Exit codes: `0` on success, `1` on an uncaught script error or a never-observed
-task error (printed to stderr), `2` on CLI/usage errors, and `n` when the script
-calls `ponos.exit(n)`. For `ponos check`, `1` means findings and `2` also covers
+task error (printed to stderr), `2` on CLI/usage errors, `n` when the script
+calls `ponos.exit(n)`, and `130`/`143` when the run is cancelled by SIGINT/
+SIGTERM (teardown — including killing in-flight exec children — runs before
+the exit). For `ponos check`, `1` means findings and `2` also covers
 "check could not run" (see [Checking scripts](#checking-scripts)).
 
 ## Output format
@@ -177,6 +179,8 @@ never hang.
 | `ponos.spawn(fn)` → `task:await()` | Concurrent task; errors re-raise at the await site |
 | `ponos.join({task, …})` | Wait for tasks → per-task `{ok, value}` / `{ok=false, error}` entries |
 | `ponos.parallel(items, fn, {concurrency=})` | Parallel fan-out (default unlimited) → per-item outcome entries in item order |
+| `ponos.exec(cmd, {timeoutMs=})` | Run a shell command via `/bin/sh -c` → `{ exitCode, stdout, stderr }` (any exit code is data; only could-not-run and timeout raise — see below) |
+| `ponos.json.parse(s)` / `ponos.json.stringify(v, {indent=})` | Pure JSON decode (`null` → `nil`, raises on malformed input) / encode (string keys only) |
 | `ponos.sleep(ms)` / `ponos.log(msg)` / `ponos.exit(code)` / `ponos.version` | Runtime helpers |
 
 ### Prompt text
@@ -267,15 +271,84 @@ write a nil-check retry loop, as above.
 
 Scripts run in a sandboxed Luau environment: `string`, `table`, `math`,
 `utf8`, `bit32`, `buffer`, `os.time`, `os.clock`, and `print` — no file I/O,
-subprocesses, network, or debug facilities. `require` resolves `.luau`
-modules relative to the requiring file with no directory boundary
-(`require("../shared/helper")` reaches sibling trees); non-relative require
-strings (absolute paths, bare module names, aliases) are rejected. Scripts
-are trusted code — they drive agents with your full authority, and the
-sandbox limits the blast radius of bugs, not malice. (One deviation: a
-restricted `coroutine` table containing only `yield` remains visible
-because the embedded async runtime needs it; the scheduling primitives
-are absent.)
+network, or debug facilities. `require` resolves `.luau` modules relative to
+the requiring file with no directory boundary (`require("../shared/helper")`
+reaches sibling trees); non-relative require strings (absolute paths, bare
+module names, aliases) are rejected. Scripts are trusted code — they drive
+agents with your full authority, and the sandbox limits the blast radius of
+bugs, not malice. (One deviation: a restricted `coroutine` table containing
+only `yield` remains visible because the embedded async runtime needs it;
+the scheduling primitives are absent.)
+
+The ambient globals expose no subprocess execution: world access arrives
+through capabilities injected at the composition root. `ponos.exec` is
+that door for the shell — implemented by a tokio runner the CLI always
+injects (there is no gating flag or config switch, because running a
+ponos script already implies arbitrary shell through the headless
+allow-all agent posture; the injection seam exists so embedders of the
+scripting runtime get a clean "no runner injected" error instead of an
+ambient shell).
+
+### Running shell commands: `ponos.exec`
+
+Between agent turns there is deterministic work — list PRs, run a build,
+format files. `ponos.exec(cmd, opts)` runs it inside the script and hands
+the result back as data, so probabilistic agent steps and deterministic
+pipeline steps compose:
+
+```lua
+--!strict
+local r = ponos.exec("gh pr list --json number,title --limit 20")
+local prs = ponos.json.parse(r.stdout)
+for _, pr in ipairs(prs) do
+    ponos.log(("#%d %s"):format(pr.number, pr.title))
+end
+```
+
+The contract:
+
+- **Invocation** is a single string run through `/bin/sh -c` — pipelines,
+ redirections, and `&&` work. POSIX `sh` semantics only: `bashisms` are
+ not guaranteed (`/bin/sh` is dash on Debian-family systems, bash
+ elsewhere). With dynamic data, quote carefully — there is no portable
+ `printf %q` under POSIX sh — single-quote arguments and escape embedded
+ single quotes as `'\''` (an argv-array form may arrive later as an
+ additive option).
+- **Any exit code is data**: the call returns `{ exitCode, stdout,
+ stderr }` and never raises for a failed command (`exitCode` maps a
+ signal death to the shell's `128 + signal` convention). Only two
+ conditions raise a catchable Lua error: the command could not run at
+ all, and `timeoutMs` elapsing — the timeout error names the command
+ and the budget, and the process *group* is killed first (mirroring the
+ prompt-timeout contract).
+- **Blocking is per-coroutine**: the calling script blocks, but spawned
+ tasks and other sessions keep progressing (exec joins no `parallel`/
+ `spawn` composition). No `timeoutMs` means no budget — the call waits
+ for the command to exit, bounded only by outer cancellation.
+- **The child inherits ponos's environment and working directory**;
+ there are no `cwd`/`env` override options in v1. **Stdin is closed**
+ (`/dev/null`): exec is non-interactive — a child that prompts fails
+ fast on EOF instead of hanging or touching your terminal.
+- **Captured output is yours**: nothing streams to the terminal; each
+ exec renders one start line (the command) and one end line (exit code
+ + duration, or a timeout/failed-to-run marker) as `[ponos] exec: …`
+ script-activity lines, suppressed by `--quiet` like all rendered
+ output.
+- **Teardown is guaranteed**: a script error, `ponos.exit`, or run
+ cancellation (Ctrl-C: the first SIGINT/SIGTERM runs the same teardown
+ and exits `128+signal`; a second signal exits immediately) kills every
+ in-flight command's process group — no orphaned children outlive the
+ run.
+
+The session id `exec` is reserved (it attributes exec lifecycle lines at
+the event sink): `agent:session({ id = "exec" })` is rejected at
+session-options validation with a clear error — choose another id.
+
+`ponos.json` exists for exactly this pattern: `parse(s)` decodes captured
+ command output into Luau data (arrays as 1..n tables, objects as
+ string-keyed tables, `null` as `nil`; malformed input raises),
+ `stringify(v, { indent = n })` encodes compactly or with `n`-space
+ indentation. It performs no I/O of its own.
 
 ### Per-session config (models and more)
 
@@ -455,7 +528,8 @@ identically — from the requiring file, with no directory boundary.
 
 See [`examples/`](examples/) — sequential review, fan-out with a concurrency
 cap, per-session model fan-out, a watchdog cancel, typed results with a
-retry loop, and two sibling workflows sharing a helper through a
+retry loop, an exec pipeline (deterministic shell steps + JSON around one
+agent turn), and two sibling workflows sharing a helper through a
 cross-tree require — and run them against the bundled mock agent:
 
 ```sh

@@ -55,9 +55,11 @@ pub fn setup_lua(cfg: &RunConfig) -> mlua::Result<Lua> {
         registry: cfg.registry.clone(),
         sink: cfg.renderer.clone(),
         transport: cfg.transport.clone(),
+        process_runner: cfg.process_runner.clone(),
         invocation_dir: cfg.invocation_dir.clone(),
         tasks: Rc::new(TaskRegistry::default()),
         sessions: RefCell::new(Vec::new()),
+        execs: RefCell::new(Vec::new()),
         exit_code: Cell::new(None),
     });
     lua.set_app_data(state);

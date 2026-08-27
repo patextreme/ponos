@@ -69,6 +69,67 @@ pub trait ConfigSource: Send + Sync {
     fn discover(&self, invocation_dir: &Path) -> Result<Registry, ConfigError>;
 }
 
+/// Why an execution could not run at all: data for the scripting layer
+/// to raise, not an I/O type of core's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecError {
+    /// The command could not be spawned (the message names the command
+    /// and the OS error).
+    Spawn(String),
+}
+
+impl std::fmt::Display for ExecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecError::Spawn(msg) => write!(f, "could not run command {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ExecError {}
+
+/// Outcome of one process execution: captured output plus how it ended.
+/// `exit_code` is `None` only when no exit status exists — the command
+/// timed out (`timed_out: true`, the group already killed) or died
+/// without reporting a code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecOutcome {
+    /// The command's exit code, when one exists. A signal death is
+    /// normalized to the shell's `128 + signal` convention by the
+    /// runner, so `None` + `timed_out: false` means "never ran to a
+    /// status" (a spawn failure raises [`ExecError`] instead).
+    pub exit_code: Option<i32>,
+    /// Everything the command wrote to stdout (captured, not streamed).
+    pub stdout: String,
+    /// Everything the command wrote to stderr.
+    pub stderr: String,
+    /// `timeoutMs` elapsed: the process group was killed before this
+    /// outcome was returned.
+    pub timed_out: bool,
+}
+
+/// Where process execution comes from — the fifth port, funding
+/// `ponos.exec`. Like the other world-touching seams ([`AgentTransport`],
+/// [`ConfigSource`]), the trait is pure data-in/data-out (a command
+/// string, an optional timeout budget, captured output back); the tokio
+/// `/bin/sh -c` implementation lives at the composition root and is
+/// injected through `RunConfig`. A consumer that injects no runner gets
+/// a clean "no runner injected" error from the binding instead of an
+/// ambient shell — "who may touch the world" stays a composition
+/// decision. Dropping the returned future before it resolves is the
+/// cancellation contract: implementations must kill the command's
+/// whole process group (no orphans outlive the run).
+pub trait ProcessRunner: Send + Sync {
+    /// Run `cmd` under `/bin/sh -c`, capturing stdout/stderr. `timeout_ms`
+    /// of `None` means no budget. Manually boxed futures keep the trait
+    /// object-safe, mirroring [`AgentTransport::start_session`].
+    fn run<'a>(
+        &'a self,
+        cmd: &'a str,
+        timeout_ms: Option<u64>,
+    ) -> Pin<Box<dyn Future<Output = Result<ExecOutcome, ExecError>> + Send + 'a>>;
+}
+
 /// Where session events go. The session driver folds wire updates and
 /// emits structured [`SessionEvent`]s through this port; the terminal
 /// renderer implements it today, and a TUI or structured logger can take

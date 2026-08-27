@@ -1,6 +1,6 @@
 //! The run entrypoint and end-of-run semantics: drive the script to
 //! completion (or failure), wait for outstanding tasks, tear down agent
-//! sessions, and report the outcome.
+//! sessions and in-flight execs, and report the outcome.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -19,6 +19,7 @@ use super::state::{RunConfig, RunOutcome, RuntimeState};
 /// Terminate and reap every agent subprocess; optionally cancel in-flight
 /// turns first (error / explicit-exit paths).
 async fn teardown(state: &Rc<RuntimeState>, cancel: bool) {
+    kill_inflight_execs(state).await;
     let sessions: Vec<SessionHandle> = state.sessions.borrow().iter().cloned().collect();
     for s in &sessions {
         if cancel {
@@ -30,6 +31,36 @@ async fn teardown(state: &Rc<RuntimeState>, cancel: bool) {
         s.join().await;
     }
     state.sessions.borrow_mut().clear();
+}
+
+/// Kill every in-flight `ponos.exec` process group: signal each
+/// registered exec, which makes the awaiting binding drop its port
+/// future — and dropping that future is the runner's kill-the-group
+/// cancel-safety contract (so this is a bounded wait for kills that are
+/// already done, not the kill mechanism itself). Zombies never outlive
+/// the run: teardown waits until every exec is dead — deregistered, or
+/// its coroutine already dropped (an abandoned root future took the
+/// port future with it, and the kill-on-drop guard fired synchronously).
+async fn kill_inflight_execs(state: &Rc<RuntimeState>) {
+    for entry in state.execs.borrow().iter() {
+        entry.killed.set(true);
+        entry.cancel.notify_waiters();
+    }
+    // Yield in small steps so the LocalSet can poll the woken exec
+    // coroutines: a live callback (two owners — the registry plus the
+    // coroutine holding it) drops its port future and deregisters. An
+    // entry with one owner (the registry alone) belonged to a coroutine
+    // already dropped — outer cancellation abandons the root future,
+    // and with it the port future — so it is dead by construction, not
+    // a straggler worth waiting on.
+    for _ in 0..400 {
+        if state.execs.borrow().iter().all(|e| Rc::strong_count(e) == 1) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // Deadline (2s): proceed regardless — the kill fired synchronously in
+    // the drop, so a straggler here is a bookkeeping lag, not a live child.
 }
 
 /// Wait for all outstanding spawned tasks to complete (script-end drain).
@@ -74,7 +105,35 @@ pub async fn run(cfg: RunConfig) -> RunOutcome {
     let abs = std::fs::canonicalize(&script_path).unwrap_or(script_path.clone());
     let chunk = lua.load(source).set_name(format!("@{}", abs.display()));
 
-    let result: mlua::Result<()> = chunk.eval_async().await;
+    // However the script ends — its own future resolving, or the
+    // embedding process cancelling from outside (SIGINT/SIGTERM
+    // forwarded by the composition root; the watch carries the code to
+    // report, 128+signal by shell convention). Outer cancel abandons
+    // the script future on the spot: root-coroutine exec port futures
+    // drop with it (kill-on-drop fires synchronously), then teardown
+    // signals whatever remains — spawned tasks, agent sessions — and
+    // waits for the kills to land. The cancelled exec never surfaces as
+    // a script error; the script's own outcome is moot.
+    enum End {
+        Script(mlua::Result<()>),
+        Cancelled(i32),
+    }
+    let mut shutdown = cfg.shutdown;
+    let end = tokio::select! {
+        result = chunk.eval_async() => End::Script(result),
+        code = shutdown_code(shutdown.as_mut()) => End::Cancelled(code),
+    };
+    let result = match end {
+        End::Cancelled(code) => {
+            teardown(&state, true).await;
+            return RunOutcome {
+                code,
+                error: None,
+                undelivered_errors: vec![],
+            };
+        }
+        End::Script(result) => result,
+    };
 
     match result {
         Ok(()) => {}
@@ -118,5 +177,18 @@ pub async fn run(cfg: RunConfig) -> RunOutcome {
         code: i32::from(!undelivered.is_empty()),
         error: None,
         undelivered_errors: undelivered,
+    }
+}
+
+/// Resolve when the embedding process cancels the run; the watch value
+/// is the exit code to report. `None` — and a sender dropped without
+/// ever signalling — both mean "no outer cancel": never resolve.
+async fn shutdown_code(shutdown: Option<&mut tokio::sync::watch::Receiver<i32>>) -> i32 {
+    let Some(rx) = shutdown else {
+        return std::future::pending().await;
+    };
+    match rx.changed().await {
+        Ok(()) => *rx.borrow(),
+        Err(_sender_gone) => std::future::pending().await,
     }
 }

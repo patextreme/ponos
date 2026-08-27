@@ -30,3 +30,4 @@ pub use ponos_core::VERSION;
 
 pub mod bridge;
 pub mod cli;
+pub mod exec;
