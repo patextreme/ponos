@@ -1,6 +1,6 @@
 ---
 name: ponos
-description: Author, validate, and run Luau automation scripts for ponos — the CLI that drives ACP-speaking AI agents (Claude Code, Gemini CLI, Codex, …) headlessly from sandboxed Luau. Use this skill whenever you are writing or editing a .luau script that uses the `ponos` global (ponos.agent, session:prompt, ponos.parallel, ponos.spawn, resultSchema, configOptions, setConfig), configuring the agent registry (.ponos/config.toml), running or debugging `ponos run` / `ponos check` / `ponos types`, or whenever the user wants to orchestrate, fan out, pipeline, or watchdog multiple AI agents as code. Also trigger when debugging ponos script errors, exit codes, timeouts, cancels, typed results, or concurrency behavior.
+description: Author, validate, and run Luau automation scripts for ponos — the CLI that drives ACP-speaking AI agents (Claude Code, Gemini CLI, Codex, …) headlessly from sandboxed Luau. Use this skill whenever you are writing or editing a .luau script that uses the `ponos` global (ponos.agent, session:prompt, ponos.parallel, ponos.spawn, ponos.exec, ponos.json, resultSchema, configOptions, setConfig), configuring the agent registry (.ponos/config.toml), running or debugging `ponos run` / `ponos check` / `ponos types`, or whenever the user wants to orchestrate, fan out, pipeline, or watchdog multiple AI agents as code, or run deterministic shell steps between agent turns. Also trigger when debugging ponos script errors, exit codes, timeouts, cancels, typed results, or concurrency behavior.
 ---
 
 # ponos scripting
@@ -17,7 +17,7 @@ owns its own agent subprocess; closing a session reaps the process.
   - `.ponos/ponos.d.luau` — the script API type definitions, embedded
     verbatim in the binary; the single source of truth for shapes.
   - `examples/*.luau` — vetted scripts (sequential, fan-out, model
-    fan-out, watchdog, typed results).
+    fan-out, watchdog, typed results, exec pipeline).
   - `crates/ponos-luau/` (Luau runtime + sandbox), `crates/ponos-acp/`
     (ACP client), `crates/ponos-check/` (`check` pipeline),
     `crates/ponos-cli/src/bin/mock-agent/` (scriptable test agent used
@@ -57,10 +57,13 @@ standard Luau base library (`pcall`, `error`, `assert`, `tostring`,
 `tonumber`, `pairs`, `ipairs`, `select`, `type`/`typeof`,
 `setmetatable`/`getmetatable`, `rawget`/`rawset`, …), and a restricted
 `coroutine` table with only `yield` (the async runtime needs it). There is
-**no** file I/O, no `io`, no subprocesses, no network, no
-`debug`, no `loadstring`/`collectgarbage`. Do not fight this —
-orchestration logic belongs in the script; anything touching the machine
-belongs in the *agent's* prompt or the agent registry.
+**no** file I/O, no `io`, no network, no
+`debug`, no `loadstring`/`collectgarbage`, and the ambient globals expose
+no subprocess execution — world access arrives through injected
+capabilities, and `ponos.exec` (see below) is the shell door, always
+injected by the `ponos` CLI. Orchestration logic belongs in the script;
+machine work belongs in `ponos.exec`, the *agent's* prompt, or the agent
+registry.
 
 `require` resolves `.luau` modules relative to the requiring file
 (`foo.luau`, `foo.lua`, `foo/init.luau`, `foo/init.lua`) with no directory
@@ -88,11 +91,15 @@ file.
 | `ponos.spawn(fn)` → `task:await()` | Concurrent task; errors re-raise at the await site. |
 | `ponos.join({task, …})` | Wait for tasks → per-task outcome entries. |
 | `ponos.parallel(items, fn, { concurrency = n }?)` | Fan-out (default unlimited) → per-item outcome entries in item order. |
+| `ponos.exec(cmd, { timeoutMs = n }?)` | Run a shell command via `/bin/sh -c` → `{ exitCode, stdout, stderr }`. Any exit code is data; only could-not-run and timeout raise (process group killed first). See [Shell exec](#shell-exec-ponos-exec). |
+| `ponos.json.parse(s)` / `ponos.json.stringify(v, { indent = n }?)` | Pure JSON decode (`null` → `nil`, raises on malformed input) / encode (string keys only, arrays are 1..n). |
 | `ponos.sleep(ms)` / `ponos.log(msg)` / `ponos.exit(code)` / `ponos.version` | Helpers. `log` renders with a `[ponos]` prefix; `exit` terminates the process with code `n`. |
 
 Session options (`agent:session({...})`; all optional):
 
-- `id` — session label; defaults to `s1, s2, …` per agent.
+- `id` — session label; defaults to `s1, s2, …` per agent. `"exec"` is
+  reserved (exec lifecycle attribution) and rejected at session
+  creation.
 - `cwd` — working dir for the agent subprocess; defaults to the
   invocation directory.
 - `mcpServers` — suggested MCP servers: `{ type = "stdio", name =,
@@ -140,7 +147,9 @@ any agent subprocess spawns.)
 - **Exit codes are a contract.** `0` success; `1` uncaught script error,
   a never-observed task error (a failed task nobody awaited), or `check`
   findings; `2` CLI usage errors (and "check could not run"); `n` when
-  the script calls `ponos.exit(n)`.
+  the script calls `ponos.exit(n)`; `130`/`143` when the run is cancelled
+  by SIGINT/SIGTERM (teardown — killing in-flight execs and sessions —
+  runs before the exit; a second signal exits immediately).
 - **Un-awaited task errors still fail the run** (exit 1, reported to
   stderr). Always `await()`/`join()` your tasks, or handle their outcome
   entries.
@@ -233,6 +242,55 @@ s:cancel()
 assert(work:await() == "cancelled")
 s:close()
 ```
+
+## Shell exec (`ponos.exec`)
+
+Between agent turns there is deterministic work — list PRs, run a
+build, format files. `ponos.exec(cmd, opts)` runs it inside the script
+and hands the result back as data, so deterministic steps and agent
+turns compose:
+
+```lua
+--!strict
+local r = ponos.exec("gh pr list --json number,title --limit 20")
+if r.exitCode ~= 0 then error("gh failed: " .. r.stderr, 0) end
+for _, pr in ipairs(ponos.json.parse(r.stdout)) do
+    ponos.log(("#%d %s"):format(pr.number, pr.title))
+end
+```
+
+- **Invocation** is one string through `/bin/sh -c` — pipelines,
+  redirections, `&&` work. POSIX `sh` semantics only: bashisms
+  (`[[ ]]`, arrays, `$'…'`) are not guaranteed (`/bin/sh` is dash on
+  Debian-family systems). With dynamic data, single-quote arguments and
+  escape embedded single quotes as `'\''` — there is no portable
+  `printf %q` under POSIX sh.
+- **Any exit code is data**: the call returns
+  `{ exitCode, stdout, stderr }` and never raises for a failed command
+  (a signal death maps to the shell's `128 + signal`). Only two
+  conditions raise a catchable Lua error: the command could not run at
+  all, and `timeoutMs` elapsing — the timeout error names the command
+  and the budget, and the process *group* is killed first (mirroring
+  the prompt-timeout contract). No `timeoutMs` means no budget.
+- **Blocking is per-coroutine**: the calling script blocks, but spawned
+  tasks and other sessions keep progressing.
+- **Environment and cwd are inherited**; stdin is closed (`/dev/null`),
+  so a child that prompts fails fast on EOF. No `cwd`/`env` overrides
+  in v1.
+- **Output is captured, not streamed**: each exec renders one start
+  line (the command) and one end line (exit code + duration) as
+  `[ponos] exec: …`; `--quiet` suppresses them like all rendered
+  output.
+- **Teardown kills in-flight execs**: a script error, `ponos.exit`, or
+  cancellation kills every in-flight process group — no orphans. A
+  teardown-cancelled exec raises `exec \`cmd\` cancelled: the run is
+  ending` inside its own coroutine; it never changes the run's own
+  exit code (`ponos.exit(0)` with an exec in flight still exits 0).
+
+The session id `exec` is reserved for these lifecycle lines —
+`agent:session({ id = "exec" })` is rejected; choose another id.
+`ponos.json.parse` / `stringify` exist for this pattern (pure, no I/O;
+`null` → `nil`; string keys only; `{ indent = n }` pretty-prints).
 
 ## Typed results, details
 
@@ -345,6 +403,11 @@ so delete dead requires.
   before `model` on opencode) — the agent's re-derivation silently
   reverts it; order your `setConfig` calls: driving options first.
 - Empty Luau table `{}` in a schema means JSON object, not array.
+- Bashisms in `ponos.exec` commands (`[[ ]]`, arrays, `$'…'`) — `/bin/sh`
+  is POSIX-only; single-quote dynamic args (escape embedded quotes as
+  `'\''`).
+- Expecting a nonzero `ponos.exec` exit to fail the run — every exit
+  code is data; branch on `exitCode` yourself.
 - Unknown literal agent name → check finding and run pre-flight failure;
   registry miss at runtime raises at the `ponos.agent(...)` call.
 - Expecting a value from `result` without a nil-check retry loop —
