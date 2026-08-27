@@ -206,12 +206,22 @@ pub fn main() -> ExitCode {
     let renderer = std::sync::Arc::new(Renderer::new(render_opts));
     // The composition line change ② moved out of the script crate: the
     // ACP stdio adapter is chosen here, at the composition root, and
-    // injected through the `AgentTransport` port.
+    // injected through the `AgentTransport` port. The process runner is
+    // the same decision one port over: ponos always injects it (there is
+    // no gating flag — running a ponos script already implies arbitrary
+    // shell through the headless allow-all agent posture).
+    // Outer cancellation channel: SIGINT/SIGTERM forward into it below
+    // (first signal — teardown rides inside `run`, exit code 130/143;
+    // second signal — exit at once). Created before the runtime so the
+    // config is complete here; the monitor task is spawned inside it.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(0);
     let config = RunConfig {
         script_path: script,
         invocation_dir,
         registry,
         transport: std::sync::Arc::new(ponos_acp::Transport),
+        process_runner: Some(std::sync::Arc::new(crate::exec::TokioProcessRunner)),
+        shutdown: Some(shutdown_rx),
         renderer,
     };
 
@@ -220,7 +230,23 @@ pub fn main() -> ExitCode {
         .build()
         .expect("tokio runtime");
 
-    let outcome = rt.block_on(tokio::task::LocalSet::new().run_until(script::run(config)));
+    // Outer cancellation: SIGINT/SIGTERM race the script inside `run`.
+    // The first signal rides the run's teardown path (kills in-flight
+    // exec process groups, closes agent sessions) and the run reports
+    // the shell-conventional 128+signal exit code; a second signal
+    // during teardown exits at once. Signal disposition is a
+    // world-touching composition decision, so it is installed here —
+    // the run loop itself only sees the channel.
+    let outcome = rt.block_on(async {
+        let signal_monitor = install_signal_monitor(shutdown_tx);
+        let outcome = tokio::task::LocalSet::new()
+            .run_until(script::run(config))
+            .await;
+        if let Some(monitor) = signal_monitor {
+            monitor.abort();
+        }
+        outcome
+    });
 
     if let Some(error) = &outcome.error {
         eprintln!("error: {error}");
@@ -230,6 +256,49 @@ pub fn main() -> ExitCode {
     }
 
     ExitCode::from(u8::try_from(outcome.code).unwrap_or(1))
+}
+
+/// Install the SIGINT/SIGTERM monitor forwarding into the run's
+/// shutdown watch. The first signal sends the shell-conventional code
+/// (130/143) — the run then tears itself down — and any later signal
+/// exits immediately (the "press again to force" escape for a stuck
+/// teardown). Returns the monitor task, aborted when the run ends on
+/// its own so a late signal cannot kill a finishing process. Non-unix
+/// platforms have no such signals: no monitor, and a dropped sender
+/// the run reads as "nobody will ever cancel".
+fn install_signal_monitor(
+    shutdown_tx: tokio::sync::watch::Sender<i32>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let Ok(mut int) = signal(SignalKind::interrupt()) else {
+            return None;
+        };
+        let Ok(mut term) = signal(SignalKind::terminate()) else {
+            return None;
+        };
+        Some(tokio::spawn(async move {
+            let code = tokio::select! {
+                _ = int.recv() => 130,
+                _ = term.recv() => 143,
+            };
+            let _ = shutdown_tx.send(code);
+            // A second signal means the user wants out *now*: teardown
+            // is still draining — exit hard with the interrupt code.
+            tokio::select! {
+                _ = int.recv() => {}
+                _ = term.recv() => {}
+            }
+            std::process::exit(130);
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        drop(shutdown_tx);
+        None
+    }
 }
 
 #[cfg(test)]

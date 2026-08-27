@@ -99,3 +99,11 @@ fn example_model_fanout() {
         ],
     );
 }
+
+#[test]
+fn example_exec_pipeline() {
+    // git may or may not be present in the project dir (it is not a
+    // repo in the test sandbox): both the git path and the printf
+    // fallback must carry the example.
+    run_example("exec_pipeline.luau", &[]);
+}

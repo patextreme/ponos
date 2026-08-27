@@ -54,7 +54,9 @@ exceptions).
   are a contract: `0` success, `1` script error, never-observed task
   error, or (for `check`/`run` pre-flight) findings, `2` usage — and for
   `ponos check` also "check could not run" (missing script, registry
-  discovery failure, luau-lsp absent) — `n` via `ponos.exit(n)`, plus
+  discovery failure, luau-lsp absent) — `n` via `ponos.exit(n)`, or
+  `130`/`143` when the run is cancelled by SIGINT/SIGTERM (teardown
+  first), plus
   the hidden `crates/ponos-cli/src/bridge.rs` MCP result server) and `mock-agent`
   (`crates/ponos-cli/src/bin/mock-agent/`).
 - `crates/ponos-acp` — ACP client over stdio. ponos declares exactly one
@@ -87,10 +89,11 @@ exceptions).
 - `crates/ponos-core` — the domain, I/O-free and adapter-free: task
   bookkeeping (`ponos.spawn`/`join`/`map`), turn/tool fold semantics,
   result contracts, the config model, structured `SessionEvent`s, and
-  the ports. Exactly four funded ports (`crates/ponos-core/src/ports.rs`):
-  `AgentTransport`, `ConfigSource`, `EventSink`, `InteractionPolicy`.
-  The set is closed — a new port is a design decision that gets its own
-  change, not a drive-by.
+  the ports. Exactly five funded ports (`crates/ponos-core/src/ports.rs`):
+  `AgentTransport`, `ConfigSource`, `EventSink`, `InteractionPolicy`,
+  `ProcessRunner` (funding `ponos.exec`, added deliberately via its own
+  change). The set is closed — a new port is a design decision that gets
+  its own change, not a drive-by.
 - TUI readiness: core emits structured `SessionEvent`s through the
   `EventSink` port and all interaction flows through
   `InteractionPolicy` (today the headless allow-all policy), so a

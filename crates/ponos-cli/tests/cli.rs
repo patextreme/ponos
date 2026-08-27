@@ -872,3 +872,348 @@ bash:close(); read:close()
 fn home_dir_string() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/home".to_string())
 }
+
+// ---------------------------------------------------------------------------
+// ponos.exec rendering + environment (shell-exec capability)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn exec_lifecycle_lines_render_in_order_around_a_slow_command() {
+    // render-logging "Exec lines render command and outcome" + "Output
+    // is not echoed": a start line when the command launches, an end
+    // line with exit code and duration when it settles — timestamped
+    // like every other line and attributed as script activity
+    // (`[ponos]`), in order around the call. The payload is built by
+    // adjacent-string concatenation (`'ca''ptured-payload'`) so its
+    // text never appears in the command string itself — proving the
+    // terminal shows only lifecycle lines, never captured output.
+    let project = Project::new("exec-lines", &[]);
+    let script = project.script(
+        r#"
+ponos.log("before")
+local r = ponos.exec("sleep 0.3; printf 'ca''ptured-payload'")
+assert(r.exitCode == 0 and r.stdout == "captured-payload", "stdout: " .. r.stdout)
+ponos.log("after")
+"#,
+    );
+    let (code, stdout, _) = project.run(&script, &["--no-color"]);
+    assert_eq!(code, 0, "{stdout}");
+    let stripped = common::strip_timestamps(&stdout);
+    // Captured output is the script's, not the terminal's: the payload
+    // (distinct from the command text the lifecycle lines echo) must
+    // not appear anywhere in the rendered output.
+    assert!(
+        !stripped.contains("captured-payload"),
+        "captured child output must not be echoed:\n{stripped}"
+    );
+    let lines: Vec<&str> = stripped.lines().collect();
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("line with {needle:?} missing:\n{stripped}"))
+    };
+    assert_eq!(
+        lines[at("exec: sleep 0.3")],
+        "[ponos] exec: sleep 0.3; printf 'ca''ptured-payload'",
+        "{stripped}"
+    );
+    let end = at("(exit 0,");
+    assert!(
+        lines[end].starts_with("[ponos] exec: sleep 0.3; printf 'ca''ptured-payload' (exit 0, "),
+        "end line: {}",
+        lines[end]
+    );
+    assert!(at("before") < at("exec: sleep 0.3"), "order:\n{stripped}");
+    assert!(at("exec: sleep 0.3") < end, "order:\n{stripped}");
+    assert!(end < at("after"), "order:\n{stripped}");
+}
+
+#[test]
+fn quiet_suppresses_exec_lines() {
+    // render-logging "Quiet suppresses exec lines": exec lines are
+    // session-event-like, not script logs — `--quiet` drops them, while
+    // `ponos.log` output survives.
+    let project = Project::new("exec-quiet", &[]);
+    let script = project.script(
+        r#"
+ponos.log("log-line")
+local r = ponos.exec("printf hi")
+assert(r.exitCode == 0)
+"#,
+    );
+    let (code, stdout, _) = project.run(&script, &["--quiet"]);
+    let stdout = common::strip_timestamps(&stdout);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.contains("[ponos] log-line"), "{stdout}");
+    assert!(
+        !stdout.contains("exec:"),
+        "quiet must drop exec lines:\n{stdout}"
+    );
+    assert!(!stdout.contains("printf hi"), "{stdout}");
+}
+
+#[test]
+fn exec_inherits_env_and_cwd() {
+    // shell-exec "Environment inheritance" + "Working directory
+    // inheritance": the child sees ponos's env and runs in the
+    // invocation directory (marker.txt lives in the project dir).
+    let project = Project::new("exec-env", &[]);
+    std::fs::write(project.dir.join("marker.txt"), "from-cwd\n").unwrap();
+    let script = project.script(
+        r#"
+local r = ponos.exec("printf %s $PONOS_EXEC_TOKEN; cat marker.txt")
+assert(r.exitCode == 0, "exit: " .. tostring(r.exitCode) .. " " .. r.stderr)
+assert(r.stdout == "tok-7from-cwd\n", "stdout: " .. r.stdout)
+"#,
+    );
+    let output = Command::new(ponos_bin())
+        .arg("run")
+        .arg(&script)
+        .current_dir(&project.dir)
+        .env("PONOS_EXEC_TOKEN", "tok-7")
+        .output()
+        .expect("run ponos");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// Drive one `ponos run` of the park script, deliver `sig` to the
+/// process once it reports parked (an exec is in flight), and check the
+/// cancelled run: exit code, no orphaned exec child, and (for the
+/// color check) the rendered lines.
+#[cfg(unix)]
+fn signal_cancels_the_run(sig: i32, expected_code: i32, tag: &str, extra_flags: &[&str]) -> String {
+    use std::io::BufRead;
+    use std::process::Stdio;
+
+    // A previously failed run may have leaked this tag's sleep; sweep
+    // it first so the final no-orphan assertion is about *this* run.
+    common::kill_processes(tag);
+    common::wait_for_processes(tag, 0, "stale tag cleared before the run");
+
+    let project = Project::new(&format!("signal-{tag}"), &[]);
+    let script = project.script(&format!(
+        r#"
+ponos.spawn(function() return ponos.exec("sleep {tag}") end)
+ponos.sleep(200)
+ponos.log("parked")
+ponos.sleep(60000)
+"#
+    ));
+    let mut child = std::process::Command::new(ponos_bin())
+        .arg("run")
+        .args(extra_flags)
+        .arg(&script)
+        .current_dir(&project.dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ponos");
+
+    // Read stdout on a thread so the signal can fire exactly when the
+    // script is parked (a blocking read here could never time out).
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let stdout = child.stdout.take().expect("piped stdout");
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            if tx.send(line.expect("read stdout")).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = String::new();
+    loop {
+        let line = rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("script never parked");
+        seen.push_str(&line);
+        seen.push('\n');
+        if line.contains("parked") {
+            break;
+        }
+    }
+    assert!(
+        seen.contains(&format!("exec: sleep {tag}")),
+        "exec must be in flight before the signal:\n{seen}"
+    );
+
+    // The signal reaches ponos only — the exec child runs in its own
+    // process group, out of a terminal signal's reach — so a surviving
+    // child after this would be ponos's teardown failing, not the OS.
+    unsafe { libc::kill(child.id() as i32, sig) };
+
+    // Drain remaining lines (pipe closes at exit) and reap the status.
+    while let Ok(line) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        seen.push_str(&line);
+        seen.push('\n');
+    }
+    let status = child.wait().expect("wait ponos");
+    assert_eq!(
+        status.code(),
+        Some(expected_code),
+        "cancelled run must exit {expected_code}; output:\n{seen}"
+    );
+    common::wait_for_processes(tag, 0, "signal teardown killed the in-flight exec");
+    seen
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_cancels_the_run_kills_in_flight_exec_and_exits_130() {
+    // shell-exec "In-flight execs are killed at teardown", the outer
+    // cancel leg: SIGINT must ride the run's teardown (kill the exec
+    // group, close sessions) and exit 130 — previously the process died
+    // on the signal with no teardown and the exec child was orphaned.
+    signal_cancels_the_run(libc::SIGINT, 130, "8841", &["--no-color"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_cancels_the_run_and_exits_143() {
+    signal_cancels_the_run(libc::SIGTERM, 143, "8842", &["--no-color"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_exec_lines_render_in_color_mode() {
+    // render-logging "Color mode shows both lines": default (color)
+    // output still carries the exec lines — timestamped and ANSI-dimmed
+    // like every other rendered line, never dropped for color reasons.
+    let seen = signal_cancels_the_run(libc::SIGINT, 130, "8843", &[]);
+    let line = seen
+        .lines()
+        .find(|l| l.contains("exec: sleep 8843") && !l.contains("("))
+        .expect("start line present in color mode");
+    assert!(
+        line.contains("\u{1b}["),
+        "color mode must ANSI-style the exec line: {line:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_during_task_drain_cancels_run_and_kills_in_flight_exec() {
+    // Regression: the shutdown watch was once raced only against the
+    // script body, so a SIGINT arriving while spawned tasks drain (the
+    // window after the body ends — here a task parked in a no-budget
+    // exec, which keeps the window open indefinitely) was swallowed,
+    // and only the second signal's hard exit could end the run,
+    // skipping teardown and orphaning the exec child. The first signal
+    // must ride the same teardown path as during the body: exit 130,
+    // child dead, no orphan.
+    use std::io::BufRead;
+    use std::process::Stdio;
+
+    let tag = "8845";
+    common::kill_processes(tag);
+    common::wait_for_processes(tag, 0, "stale tag cleared before the run");
+
+    // Unlike signal_cancels_the_run's script, the main body ENDS right
+    // after reporting parked — the signal lands in the task drain.
+    let project = Project::new("signal-drain", &[]);
+    let script = project.script(&format!(
+        r#"
+ponos.spawn(function() return ponos.exec("sleep {tag}") end)
+ponos.sleep(200)
+ponos.log("parked")
+"#
+    ));
+    let mut child = std::process::Command::new(ponos_bin())
+        .arg("run")
+        .arg("--no-color")
+        .arg(&script)
+        .current_dir(&project.dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ponos");
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let stdout = child.stdout.take().expect("piped stdout");
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            if tx.send(line.expect("read stdout")).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = String::new();
+    loop {
+        let line = rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("script never parked");
+        seen.push_str(&line);
+        seen.push('\n');
+        if line.contains("parked") {
+            break;
+        }
+    }
+    assert!(
+        seen.contains(&format!("exec: sleep {tag}")),
+        "exec must be in flight before the signal:\n{seen}"
+    );
+    // Let the body finish and the run settle into the drain.
+    std::thread::sleep(std::time::Duration::from_millis(250));
+
+    unsafe { libc::kill(child.id() as i32, libc::SIGINT) };
+
+    // Bounded reap: under the bug the run never exits on one signal
+    // (the parked exec has no budget), so the regression must fail
+    // here rather than hang the suite.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait ponos") {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "run ignored the first SIGINT during the task drain (output so far):\n{seen}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    while let Ok(line) = rx.recv_timeout(std::time::Duration::from_secs(1)) {
+        seen.push_str(&line);
+        seen.push('\n');
+    }
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "drain-cancelled run must exit 130; output:\n{seen}"
+    );
+    common::wait_for_processes(tag, 0, "drain teardown killed the in-flight exec");
+}
+
+#[test]
+fn teardown_cancelled_exec_renders_start_but_no_end_line() {
+    // shell-exec "Exec lifecycle is observable": an exec cancelled by
+    // teardown emits no end event — the run's shutdown ended it, not
+    // the command's outcome. The start line renders; an end line must
+    // not (and the run's own error still reports as itself).
+    common::kill_processes("8844");
+    common::wait_for_processes("8844", 0, "stale tag cleared before the run");
+    let project = Project::new("exec-no-end", &[]);
+    let script = project.script(
+        r#"
+ponos.spawn(function() return ponos.exec("sleep 8844") end)
+ponos.sleep(150)
+error("script exploded", 0)
+"#,
+    );
+    let (code, stdout, stderr) = project.run(&script, &["--no-color"]);
+    let stripped = common::strip_timestamps(&stdout);
+    assert_eq!(code, 1, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stripped.contains("[ponos] exec: sleep 8844"),
+        "start line must render:\n{stripped}"
+    );
+    assert!(
+        !stripped.contains("sleep 8844 ("),
+        "a teardown-cancelled exec must not render an end line:\n{stripped}"
+    );
+    common::wait_for_processes("8844", 0, "teardown killed the exec");
+}

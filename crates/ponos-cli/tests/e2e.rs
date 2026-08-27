@@ -6,8 +6,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ponos::config::Registry;
+use ponos::exec::TokioProcessRunner;
 use ponos::render::{RenderOptions, Renderer};
 use ponos::script::{self, RunConfig, RunOutcome};
+
+mod common;
 
 fn mock_agent() -> String {
     env!("CARGO_BIN_EXE_mock-agent").to_string()
@@ -44,6 +47,10 @@ fn run_with_registry(
         invocation_dir: dir.to_path_buf(),
         registry,
         transport: std::sync::Arc::new(ponos::acp::Transport),
+        // The CLI always injects the tokio runner; the suite runs the
+        // same composition so `ponos.exec` behaves identically here.
+        process_runner: Some(Arc::new(TokioProcessRunner)),
+        shutdown: None,
         renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -527,42 +534,6 @@ s:close()
     assert_eq!(out.code, 0, "error: {:?}", out.error);
 }
 
-/// Count live processes whose cmdline contains `needle` (Linux /proc
-/// scan; the mock ignores extra args, so a unique token tags exactly the
-/// agent spawned for one session).
-fn count_processes(needle: &str) -> usize {
-    let mut n = 0;
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return 0;
-    };
-    for entry in entries.flatten() {
-        let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else {
-            continue;
-        };
-        if raw
-            .split(|b| *b == 0)
-            .any(|arg| std::str::from_utf8(arg).is_ok_and(|s| s.contains(needle)))
-        {
-            n += 1;
-        }
-    }
-    n
-}
-
-/// Poll (20 ms) up to 5 s until `count_processes(needle) == want`.
-fn wait_for_processes(needle: &str, want: usize, what: &str) {
-    for _ in 0..250 {
-        if count_processes(needle) == want {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    panic!(
-        "expected {what} (count {want}) for processes tagged {needle:?}, got {}",
-        count_processes(needle)
-    );
-}
-
 #[test]
 fn closing_one_session_keeps_same_label_survivor_in_the_run_end_sweep() {
     // Two factories for the same agent name both label their first
@@ -599,8 +570,8 @@ assert(type(r.text) == "string", "survivor must stay usable after the sibling cl
     let run_dir = dir;
     let run_script = script;
     let runner = std::thread::spawn(move || run(&run_script, &run_dir));
-    wait_for_processes(&token_a, 0, "closed session reaped by close()");
-    wait_for_processes(&token_b, 1, "same-label survivor alive mid-run");
+    common::wait_for_processes(&token_a, 0, "closed session reaped by close()");
+    common::wait_for_processes(&token_b, 1, "same-label survivor alive mid-run");
     assert!(
         !runner.is_finished(),
         "observation must happen while the script is still running"
@@ -609,5 +580,172 @@ assert(type(r.text) == "string", "survivor must stay usable after the sibling cl
     assert_eq!(out.code, 0, "error: {:?}", out.error);
     // The script never closed the survivor: the run-end sweep must reap
     // it even though a same-label sibling was closed earlier.
-    wait_for_processes(&token_b, 0, "survivor reaped by the run-end sweep");
+    common::wait_for_processes(&token_b, 0, "survivor reaped by the run-end sweep");
+}
+
+// ---------------------------------------------------------------------------
+// ponos.exec (shell-exec capability)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn exec_runs_command_and_pipeline() {
+    let dir = tmpdir("exec-ok");
+    let script = write_script(
+        &dir,
+        r#"
+local r = ponos.exec("printf hello")
+assert(r.exitCode == 0, "exitCode: " .. tostring(r.exitCode))
+assert(r.stdout == "hello", "stdout: " .. tostring(r.stdout))
+assert(r.stderr == "", "stderr: " .. tostring(r.stderr))
+local p = ponos.exec("printf 'a\nb\n' | wc -l")
+assert(p.exitCode == 0 and p.stdout:find("2", 1, true), "pipeline: " .. p.stdout)
+"#,
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn exec_nonzero_exit_returns_data() {
+    let dir = tmpdir("exec-fail");
+    let script = write_script(
+        &dir,
+        r#"
+local r = ponos.exec("sh -c 'echo boom >&2; exit 3'")
+assert(r.exitCode == 3, "exitCode: " .. tostring(r.exitCode))
+assert(r.stdout == "", "stdout: " .. tostring(r.stdout))
+assert(r.stderr == "boom\n", "stderr: " .. tostring(r.stderr))
+"#,
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+}
+
+#[test]
+fn exec_timeout_kills_process_group() {
+    // Two sleeps under one shell (held open by `wait`): the timeout's
+    // process-group kill must take the shell and both children — a
+    // per-pid kill would leave one alive. The sleeps' own argv (`9871`,
+    // `9872`) is what the /proc scan finds; both must be dead after the
+    // raise.
+    let dir = tmpdir("exec-timeout");
+    let script = write_script(
+        &dir,
+        r#"
+local ok, err = pcall(ponos.exec, "sleep 9871 & sleep 9872 & wait", { timeoutMs = 300 })
+assert(not ok, "timeout must raise")
+local msg = tostring(err)
+assert(msg:find("timed out", 1, true), msg)
+assert(msg:find("300ms", 1, true), "must name the budget: " .. msg)
+assert(msg:find("wait", 1, true), "must name the command: " .. msg)
+"#,
+    );
+    let start = Instant::now();
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+    // The raise came from the budget, not the full 9871s of sleep.
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "run must not wait out the sleeps: {:?}",
+        start.elapsed()
+    );
+    // No orphans: the whole group is dead after the run.
+    common::wait_for_processes("9871", 0, "first sleep dead");
+    common::wait_for_processes("9872", 0, "second sleep dead");
+}
+
+#[test]
+fn exec_stdin_is_eof() {
+    // `cat` reads stdin until EOF; with exec's nulled stdin it must exit
+    // immediately instead of hanging (or stealing ponos's own stdin).
+    let dir = tmpdir("exec-stdin");
+    let script = write_script(
+        &dir,
+        r#"
+local r = ponos.exec("cat", { timeoutMs = 5000 })
+assert(r.exitCode == 0, "cat must see EOF and exit: " .. tostring(r.exitCode))
+assert(r.stdout == "", "no input was available")
+"#,
+    );
+    let start = Instant::now();
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "cat must not hang: {:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
+fn spawned_agent_progresses_during_exec() {
+    // shell-exec spec "Spawned agents keep progressing": the agent turn
+    // (mock delay 500ms) overlaps the exec (200ms sleep); total stays
+    // near the 500ms turn, far from a serialized 700ms.
+    let dir = tmpdir("exec-progress");
+    let script = write_script(
+        &dir,
+        &format!(
+            r#"
+local agent = ponos.agent({{ command = "{mock}", env = {{ MOCK_DELAY_MS = "500" }} }})
+local s = agent:session()
+local t = ponos.spawn(function() return s:prompt("ignored") end)
+local r = ponos.exec("sleep 0.2")
+assert(r.exitCode == 0)
+local turn = t:await()
+assert(turn.text == "ignored", turn.text)
+s:close()
+"#,
+            mock = mock_agent()
+        ),
+    );
+    let start = Instant::now();
+    let out = run(&script, &dir);
+    let elapsed = start.elapsed();
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+    assert!(
+        elapsed >= Duration::from_millis(450),
+        "must still wait for the turn: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(680),
+        "agent must progress during the exec (serialized would be ~700ms): {elapsed:?}"
+    );
+}
+
+#[test]
+fn in_flight_exec_killed_on_script_error() {
+    // shell-exec spec "Script error kills running child": a spawned task
+    // parks in a long exec; the main body errors and ends the run —
+    // teardown kills the exec's process group before returning.
+    let dir = tmpdir("exec-teardown-error");
+    let script = write_script(
+        &dir,
+        r#"
+ponos.spawn(function() return ponos.exec("sleep 9873") end)
+ponos.sleep(150)
+error("script exploded", 0)
+"#,
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 1);
+    assert!(out.error.unwrap().contains("script exploded"));
+    common::wait_for_processes("9873", 0, "in-flight exec killed by script-error teardown");
+}
+
+#[test]
+fn in_flight_exec_killed_on_ponos_exit() {
+    // shell-exec spec "ponos.exit kills running child".
+    let dir = tmpdir("exec-teardown-exit");
+    let script = write_script(
+        &dir,
+        r#"
+ponos.spawn(function() return ponos.exec("sleep 9874") end)
+ponos.sleep(150)
+ponos.exit(0)
+"#,
+    );
+    let out = run(&script, &dir);
+    assert_eq!(out.code, 0, "error: {:?}", out.error);
+    common::wait_for_processes("9874", 0, "in-flight exec killed by ponos.exit teardown");
 }

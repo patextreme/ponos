@@ -9,5 +9,5 @@ export type Config = {
 return {
 	defaultModel = "zai/glm-5.3",
 	judgeModel = "qwencloud/deepseek-v4-flash-0731",
-	changeName = "hexagonal-polish",
+	changeName = "add-shell-exec",
 } :: Config

@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use ponos_core::events::{PlanEntry, PlanStatus, SessionEvent};
 use ponos_core::ports::EventSink;
@@ -221,6 +222,20 @@ impl Renderer {
         let _ = inner.out.flush();
     }
 
+    /// `ponos.exec` lifecycle line: script-level attribution (`[ponos]`),
+    /// like [`Renderer::lifecycle`] but rendered in every non-quiet mode
+    /// — exec lines are session-event-like visibility, not `--verbose`
+    /// diagnostics, so a headless run never looks dead during a slow
+    /// command.
+    pub fn exec_line(&self, msg: &str) {
+        if self.opts.quiet {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        self.ponos_line(&mut inner, msg);
+        let _ = inner.out.flush();
+    }
+
     /// `ponos.log`: script-initiated diagnostic on stdout (not suppressed by
     /// `--quiet`, which only silences streaming render/diagnostics).
     pub fn script_log(&self, msg: &str) {
@@ -272,6 +287,52 @@ fn plan_summary(entries: &[PlanEntry]) -> String {
     format!("plan: {}", rendered.join(" "))
 }
 
+/// `X.Ys` under a minute, `Mm SS.Ss` above — the same shape tool lines
+/// use, so durations read uniformly across the output.
+fn format_duration(d: Duration) -> String {
+    let tenths = (d.as_millis() + 50) / 100;
+    if tenths < 600 {
+        format!("{}.{}s", tenths / 10, tenths % 10)
+    } else {
+        format!(
+            "{}m {:02}.{}s",
+            tenths / 600,
+            (tenths % 600) / 10,
+            tenths % 10
+        )
+    }
+}
+
+/// One-line form of a command: whitespace runs collapsed to single
+/// spaces (a multi-line command still renders as one line), truncated
+/// to the shared visible-char budget.
+fn exec_command_preview(command: &str) -> String {
+    let collapsed = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_visible(&collapsed, LINE_BUDGET).into_owned()
+}
+
+/// Start line body for one exec: the command, collapsed and truncated to
+/// the shared visible-char budget like prompt text.
+fn exec_start_line(command: &str) -> String {
+    format!("exec: {}", exec_command_preview(command))
+}
+
+/// End line body for one exec: command plus exit code + duration, or
+/// the timeout/spawn-failure marker when no exit status exists.
+fn exec_end_line(command: &str, exit_code: Option<i32>, timed_out: bool, d: Duration) -> String {
+    let marker = match (exit_code, timed_out) {
+        (Some(code), _) => format!("exit {code}"),
+        (None, true) => "timed out".to_string(),
+        (None, false) => "failed to run".to_string(),
+    };
+    format!(
+        "exec: {} ({}, {})",
+        exec_command_preview(command),
+        marker,
+        format_duration(d)
+    )
+}
+
 /// The terminal renderer as an [`EventSink`]: structured session events
 /// map onto the existing display-event handling; every byte of formatting
 /// (truncation, prefixes, colors, gating) stays here.
@@ -291,6 +352,23 @@ impl EventSink for Renderer {
             }
             SessionEvent::StderrLine { line } => self.agent_stderr(label, &line),
             SessionEvent::Lifecycle { message } => self.lifecycle(&message),
+            // Exec lifecycle: script-level `[ponos]` attribution (the
+            // reserved "exec" pseudo-label marks these events at the
+            // sink boundary; the label itself is not rendered).
+            SessionEvent::ExecStart { command } => {
+                self.exec_line(&exec_start_line(&command));
+            }
+            SessionEvent::ExecEnd {
+                command,
+                exit_code,
+                timed_out,
+                duration_ms,
+            } => self.exec_line(&exec_end_line(
+                &command,
+                exit_code,
+                timed_out,
+                Duration::from_millis(duration_ms),
+            )),
             // A structurally valid submission with no turn in flight is
             // dropped (not errored); the one-line note is the only render.
             SessionEvent::ResultVerdict { late: true, .. } => self.lifecycle(&format!(
@@ -357,5 +435,58 @@ mod tests {
             plan_summary(&entries),
             "plan: [x] read the code [>] fix the bug"
         );
+    }
+
+    // Exec lifecycle lines (render-logging "Exec lines render command
+    // and outcome"): start carries the command, end carries exit code +
+    // duration or the timeout/spawn-failure marker.
+    #[test]
+    fn exec_start_line_carries_the_command() {
+        assert_eq!(exec_start_line("printf hi"), "exec: printf hi");
+        // Whitespace runs collapse: a multi-line command renders as one
+        // line (one event, one rendered line).
+        assert_eq!(
+            exec_start_line("printf 'a\nb\nc'\n | wc -l"),
+            "exec: printf 'a b c' | wc -l"
+        );
+        let long = "x".repeat(LINE_BUDGET + 5);
+        assert_eq!(
+            exec_start_line(&long),
+            format!("exec: {}…", "x".repeat(LINE_BUDGET))
+        );
+    }
+
+    #[test]
+    fn exec_end_line_carries_code_or_marker() {
+        assert_eq!(
+            exec_end_line("true", Some(0), false, Duration::from_millis(980)),
+            "exec: true (exit 0, 1.0s)"
+        );
+        assert_eq!(
+            exec_end_line("sh -c 'exit 4'", Some(4), false, Duration::from_millis(50)),
+            "exec: sh -c 'exit 4' (exit 4, 0.1s)"
+        );
+        assert_eq!(
+            exec_end_line("sleep 5", None, true, Duration::from_millis(100)),
+            "exec: sleep 5 (timed out, 0.1s)"
+        );
+        assert_eq!(
+            exec_end_line(
+                "definitely-not-a-command",
+                None,
+                false,
+                Duration::from_millis(3)
+            ),
+            "exec: definitely-not-a-command (failed to run, 0.0s)"
+        );
+    }
+
+    #[test]
+    fn exec_duration_formats_like_tool_lines() {
+        assert_eq!(format_duration(Duration::from_millis(0)), "0.0s");
+        assert_eq!(format_duration(Duration::from_millis(2900)), "2.9s");
+        // 59.96s rounds up-front so seconds never display 60.0.
+        assert_eq!(format_duration(Duration::from_millis(59_960)), "1m 00.0s");
+        assert_eq!(format_duration(Duration::from_millis(65_000)), "1m 05.0s");
     }
 }

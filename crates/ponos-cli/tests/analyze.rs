@@ -191,4 +191,65 @@ fn real_luau_lsp_definitions_contract() {
         !stderr.contains("TypeError"),
         "happy-path script must analyze clean, stderr:\n{stderr}"
     );
+
+    // type-definitions "Exec result fields type-check" / "Exec options
+    // type-checks" / "JSON module type-checks" (shell-exec surface):
+    // a strict exec+json script analyzes clean, and each documented
+    // misuse reports a diagnostic naming the promised type.
+    let p = Project::new("exec-json-happy");
+    let script = p.write(
+        "--!strict\n\
+         local r = ponos.exec(\"true\", { timeoutMs = 100 })\n\
+         print(r.exitCode, r.stdout, r.stderr)\n\
+         local v = ponos.json.parse('[{\"n\":1}]')\n\
+         print(ponos.json.stringify(v, { indent = 2 }))\n",
+    );
+    let (code, stdout, stderr) = p.check(&script, lsp_dir);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.is_empty(), "stdout: {stdout}");
+    assert!(
+        !stderr.contains("TypeError"),
+        "exec+json script must analyze clean, stderr:\n{stderr}"
+    );
+
+    // "Exec result fields type-check" (rejecting side): `r.out` names
+    // the exec result table type.
+    let p = Project::new("bad-exec-field");
+    let script = p.write(
+        "--!strict\n\
+         local r = ponos.exec(\"true\")\n\
+         print(r.exitCode, r.stdout, r.stderr, r.out)\n",
+    );
+    let (code, _stdout, stderr) = p.check(&script, lsp_dir);
+    assert_eq!(code, 1, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("Key 'out' not found in table 'ExecResult'"),
+        "diagnostic must name the exec result type, stderr:\n{stderr}"
+    );
+
+    // "Exec options type-check" (rejecting side): a bare-number opts
+    // argument reports the ExecOptions type.
+    let p = Project::new("bad-exec-opts");
+    let script = p.write("--!strict\n ponos.exec(\"true\", 100)\n");
+    let (code, _stdout, stderr) = p.check(&script, lsp_dir);
+    assert_eq!(code, 1, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("but got 'number'") && stderr.contains("ExecOptions"),
+        "diagnostic must name the ExecOptions type, stderr:\n{stderr}"
+    );
+
+    // "JSON module type-checks" (rejecting side): an invented module
+    // member names the Json table type.
+    let p = Project::new("bad-json-member");
+    let script = p.write(
+        "--!strict\n\
+         local v = ponos.json.parse(\"1\")\n\
+         ponos.json.load(v)\n",
+    );
+    let (code, _stdout, stderr) = p.check(&script, lsp_dir);
+    assert_eq!(code, 1, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("Key 'load' not found in table 'Json'"),
+        "diagnostic must name the Json module type, stderr:\n{stderr}"
+    );
 }

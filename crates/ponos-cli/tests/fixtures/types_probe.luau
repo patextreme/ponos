@@ -173,6 +173,20 @@ else
 	assert(m2.error:find("bad item", 1, true) ~= nil, "parallel error: " .. m2.error)
 end
 
+-- ponos.exec + ponos.json (shell-exec capability): run a shell
+-- command through the injected process runner, decode its captured
+-- stdout as JSON, encode back with indentation. Nonzero exit is data,
+-- not an error.
+local ex = ponos.exec("printf '[{\"n\":1}]'")
+assert(ex.exitCode == 0, "exec exit: " .. tostring(ex.exitCode))
+assert(ex.stdout == '[{"n":1}]', "exec stdout: " .. ex.stdout)
+local items = ponos.json.parse(ex.stdout)
+assert(items[1].n == 1, "json parse: " .. tostring(items[1].n))
+local encoded = ponos.json.stringify(items, { indent = 2 })
+assert(encoded == "[\n  {\n    \"n\": 1\n  }\n]", "json stringify: " .. encoded)
+local nonzero = ponos.exec("sh -c 'exit 4'")
+assert(nonzero.exitCode == 4, "nonzero exit is data: " .. tostring(nonzero.exitCode))
+
 -- ponos.log, ponos.version.
 assert(type(ponos.version) == "string" and #ponos.version > 0, "version")
 ponos.log("probe complete: " .. ponos.version)

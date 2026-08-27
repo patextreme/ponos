@@ -18,6 +18,8 @@ fn test_lua(script_dir: &std::path::Path) -> Lua {
         invocation_dir: script_dir.to_path_buf(),
         registry: ponos::config_fs::from_parts(None, None).unwrap(),
         transport: std::sync::Arc::new(ponos::acp::Transport),
+        process_runner: None,
+        shutdown: None,
         renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
     };
     script::setup_lua(&cfg).unwrap()
@@ -255,4 +257,46 @@ fn namespace_map_rename_is_hard() {
         err.to_string().contains("nil value"),
         "calling the removed name must error: {err}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Session id `exec` reservation (shell-exec capability: the pseudo-label)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn session_id_exec_is_reserved() {
+    // The sink attributes `ponos.exec` lifecycle events under the
+    // pseudo-label "exec"; a user session with that id would collide, so
+    // session-options validation rejects it pre-spawn (the command never
+    // runs — the error must not name the agent command).
+    let dir = tmpdir("exec-id");
+    std::fs::write(dir.join("main.luau"), "").unwrap();
+    let lua = test_lua(&dir);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(tokio::task::LocalSet::new().run_until(async {
+        let err = lua
+            .load(
+                r#"
+local agent = ponos.agent({ command = "/nonexistent/ponos-test-agent" })
+local ok, err = pcall(function()
+    return agent:session({ id = "exec" })
+end)
+assert(not ok, "id `exec` must be rejected")
+error(tostring(err), 0)
+"#,
+            )
+            .set_name(format!("@{}/main.luau", dir.display()))
+            .eval_async::<()>()
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("reserved"), "{msg}");
+        assert!(
+            !msg.contains("/nonexistent"),
+            "must fail before spawning: {msg}"
+        );
+    }));
 }
