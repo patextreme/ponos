@@ -1,9 +1,8 @@
 # ptah
 
-> **Name origin:** *Ptah* is the Egyptian god of craftsmen, who created the
-> world by speaking it — fitting for a tool that drives agents purely through
-> prompts, turning intent into scripted code. ptah was formerly named ponos;
-> the name changed before release because the old word reads badly.
+> **Name origin:** *Ptah* is the Egyptian god of craftsmen and architects —
+> the master builder who shaped the world by thinking it, then speaking it
+> into being.
 
 Luau-scripted multi-agent orchestration over the
 [Agent Client Protocol](https://agentclientprotocol.com/) (ACP).
