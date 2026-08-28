@@ -1,0 +1,915 @@
+diff --git a/src/acp/agent.ts b/src/acp/agent.ts
+index 381b04d..4290f4c 100644
+--- a/src/acp/agent.ts
++++ b/src/acp/agent.ts
+@@ -44,6 +44,7 @@ import { promptToPiMessage } from './translate/prompt.js'
+ import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slash-commands.js'
+ import { getAgentDir, getEnableSkillCommands, getQuietStartup } from './pi-settings.js'
+ import { toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
++import { prepareSessionMcpConfig } from './mcp-config.js'
+ import { maybeAuthRequiredError } from './auth-required.js'
+ import { isAbsolute } from 'node:path'
+ import { existsSync, readFileSync, realpathSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+@@ -197,11 +198,14 @@ export class PiAcpAgent implements ACPAgent {
+       const cwd = opts?.cwd ?? stored.cwd
+ 
+       let proc: PiRpcProcess
++      const mcp = prepareSessionMcpConfig(opts?.mcpServers, { piCommand: process.env.PI_ACP_PI_COMMAND })
++      for (const warning of mcp.warnings) console.error(`[pi-acp] ${warning}`)
+       try {
+         proc = await PiRpcProcess.spawn({
+           cwd,
+           sessionPath: stored.sessionFile,
+-          piCommand: process.env.PI_ACP_PI_COMMAND
++          piCommand: process.env.PI_ACP_PI_COMMAND,
++          mcpConfigPath: mcp.configPath ?? undefined
+         })
+       } catch (e: any) {
+         if (e?.name === 'PiRpcSpawnError') {
+@@ -279,13 +283,18 @@ export class PiAcpAgent implements ACPAgent {
+     const fileCommands = loadSlashCommands(params.cwd)
+     const enableSkillCommands = getEnableSkillCommands(params.cwd)
+ 
+-    // Pi doesn't support mcpServers, but we accept and store.
++    // Materialize ACP-provided stdio MCP servers into a per-session pi MCP
++    // config (acp/mcp-config.ts). Unsupported servers are warned about and
++    // dropped — never a spawn failure.
++    const mcp = prepareSessionMcpConfig(params.mcpServers, { piCommand: process.env.PI_ACP_PI_COMMAND })
++
+     const session = await this.sessions.create({
+       cwd: params.cwd,
+       mcpServers: params.mcpServers,
+       conn: this.conn,
+       fileCommands,
+-      piCommand: process.env.PI_ACP_PI_COMMAND
++      piCommand: process.env.PI_ACP_PI_COMMAND,
++      mcpConfigPath: mcp.configPath
+     })
+ 
+     // Fetch state + models once (parallel) to reduce startup latency.
+@@ -356,7 +365,7 @@ export class PiAcpAgent implements ACPAgent {
+ 
+     // If quietStartup is enabled, suppress the full "startup info" prelude, but still surface
+     // the "New version available" notice (if any) since it's high-signal and actionable.
+-    const preludeText = quietStartup
++    let preludeText = quietStartup
+       ? updateNotice
+         ? updateNotice + '\n'
+         : ''
+@@ -366,6 +375,12 @@ export class PiAcpAgent implements ACPAgent {
+           updateNotice
+         })
+ 
++    // Dropped-MCP warnings are high-signal (typed results silently degrade),
++    // so they are surfaced even in quiet mode.
++    if (mcp.warnings.length > 0) {
++      preludeText = preludeText ? preludeText.trimEnd() + '\n' + mcp.warnings.join('\n') : mcp.warnings.join('\n')
++    }
++
+     if (preludeText)
+       session.setStartupInfo(preludeText)
+ 
+diff --git a/src/acp/mcp-config.ts b/src/acp/mcp-config.ts
+new file mode 100644
+index 0000000..011d168
+--- /dev/null
++++ b/src/acp/mcp-config.ts
+@@ -0,0 +1,192 @@
++import { spawnSync } from 'node:child_process'
++import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { dirname, join } from 'node:path'
++import type { McpServer, McpServerStdio } from '@agentclientprotocol/sdk'
++import { getPiCommand } from '../pi-rpc/command.js'
++
++/**
++ * Wiring for ACP-provided MCP servers.
++ *
++ * ACP clients (Zed, ptah, ...) may pass `mcpServers` in `session/new` /
++ * `session/load`. pi has no native MCP support, but the pi-mcp-adapter
++ * extension registers a `--mcp-config <path>` CLI flag that loads extra MCP
++ * config layers. We materialize the stdio servers into a per-session
++ * ephemeral config file (mode 0600 — it can carry capability tokens such as
++ * socket paths) and hand its path to the pi process. The file lives in its
++ * own mkdtemp() directory and is removed when the pi process is disposed.
++ *
++ * Graceful degradation: when the target pi lacks `--mcp-config` support
++ * (pi-mcp-adapter not installed) or a server uses a non-stdio transport, the
++ * servers are warned about and dropped — never a spawn failure.
++ */
++
++export type PreparedMcpConfig = {
++  /**
++   * Absolute path to the per-session MCP config file, or null when no config
++   * was needed (no stdio servers provided, or support missing and servers dropped).
++   */
++  configPath: string | null
++  /** Human-readable warnings for dropped servers, surfaced via startup notices. */
++  warnings: string[]
++}
++
++/** pi-mcp-adapter entry for one stdio server. */
++type PiMcpServerEntry = {
++  command: string
++  args: string[]
++  env: Record<string, string>
++  directTools: true
++}
++
++type PiMcpConfigFile = {
++  mcpServers: Record<string, PiMcpServerEntry>
++}
++
++/**
++ * ACP stdio servers are the union's untagged variant: the TS SDK strips any
++ * `type` field for them, while http/sse/acp carry `type`. Treat "missing
++ * type" (and a defensive literal `stdio`) as stdio.
++ */
++function isStdioServer(server: McpServer): server is McpServerStdio {
++  const type = (server as { type?: unknown }).type
++  return type === undefined || type === null || type === 'stdio'
++}
++
++/** Split ACP servers into stdio servers (usable) and names of dropped non-stdio ones. */
++export function filterStdioMcpServers(servers: McpServer[]): { stdio: McpServerStdio[]; droppedNonStdio: string[] } {
++  const stdio: McpServerStdio[] = []
++  const droppedNonStdio: string[] = []
++
++  for (const server of servers) {
++    if (isStdioServer(server)) stdio.push(server)
++    else droppedNonStdio.push(server.name)
++  }
++
++  return { stdio, droppedNonStdio }
++}
++
++/**
++ * Map ACP stdio servers to pi-mcp-adapter entries. Tools are registered as
++ * direct first-class pi tools (`directTools: true`): an ACP client offering a
++ * server is explicitly telling the agent it matters, so hiding it behind the
++ * adapter's `mcp` proxy search would invert that intent.
++ */
++export function toMcpConfigFile(stdio: McpServerStdio[]): PiMcpConfigFile {
++  const mcpServers: Record<string, PiMcpServerEntry> = {}
++
++  for (const server of stdio) {
++    const env: Record<string, string> = {}
++    for (const v of server.env ?? []) env[v.name] = v.value
++
++    mcpServers[server.name] = {
++      command: server.command,
++      args: [...(server.args ?? [])],
++      env,
++      directTools: true
++    }
++  }
++
++  return { mcpServers }
++}
++
++/**
++ * Write the config into its own fresh temp directory and return the file path.
++ * Mode 0600: the env block can carry capability tokens (e.g. socket paths).
++ */
++export function writeMcpConfigFile(config: PiMcpConfigFile): string {
++  const dir = mkdtempSync(join(tmpdir(), 'pi-acp-mcp-'))
++  const file = join(dir, 'mcp.json')
++  writeFileSync(file, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 })
++  return file
++}
++
++/** Best-effort removal of a config file and its temp directory. */
++export function removeMcpConfigFile(path: string): void {
++  try {
++    rmSync(dirname(path), { recursive: true, force: true })
++  } catch {
++    // stale files are inert; tmpdir cleanup eventually reclaims them
++  }
++}
++
++/** Read back a written config file (used by tests and diagnostics). */
++export function readMcpConfigFile(path: string): PiMcpConfigFile {
++  return JSON.parse(readFileSync(path, 'utf-8')) as PiMcpConfigFile
++}
++
++// --- capability probe -------------------------------------------------------
++
++/**
++ * `--mcp-config` is registered by the pi-mcp-adapter extension, not by pi
++ * core, so its presence must be probed. Cached per pi-acp process: probed
++ * lazily only when stdio MCP servers are actually offered.
++ */
++let mcpConfigSupportCache: boolean | null = null
++
++/** Reset the per-process probe cache (test helper). */
++export function resetMcpConfigSupportCacheForTests(): void {
++  mcpConfigSupportCache = null
++}
++
++/**
++ * Probe whether the target pi understands `--mcp-config` by scanning its
++ * `--help` output. Returns false when pi is missing or the flag is absent.
++ */
++export function piSupportsMcpConfig(piCommand?: string): boolean {
++  if (mcpConfigSupportCache !== null) return mcpConfigSupportCache
++
++  try {
++    const res = spawnSync(getPiCommand(piCommand), ['--help'], { encoding: 'utf-8', timeout: 10_000 })
++    const text = `${res.stdout ?? ''}\n${res.stderr ?? ''}`
++    mcpConfigSupportCache = res.status === 0 && text.includes('--mcp-config')
++  } catch {
++    mcpConfigSupportCache = false
++  }
++
++  return mcpConfigSupportCache
++}
++
++// --- session-level preparation ----------------------------------------------
++
++/**
++ * Prepare the per-session MCP config from ACP-provided servers: filter to
++ * stdio, probe support, write the ephemeral file. Callers pass `configPath`
++ * to `PiRpcProcess.spawn` and surface `warnings` to the user; the file is
++ * removed when the pi process is disposed.
++ */
++export function prepareSessionMcpConfig(
++  servers: McpServer[] | undefined | null,
++  opts: { piCommand?: string }
++): PreparedMcpConfig {
++  const all = servers ?? []
++  if (all.length === 0) return { configPath: null, warnings: [] }
++
++  const { stdio, droppedNonStdio } = filterStdioMcpServers(all)
++  const warnings: string[] = []
++
++  if (droppedNonStdio.length > 0) {
++    warnings.push(
++      `MCP: dropped ${droppedNonStdio.length} non-stdio MCP server(s) ` +
++        `(${droppedNonStdio.join(', ')}): pi only supports stdio MCP servers.`
++    )
++  }
++
++  if (stdio.length === 0) return { configPath: null, warnings }
++
++  if (!piSupportsMcpConfig(opts.piCommand)) {
++    warnings.push(
++      `MCP: dropped ${stdio.length} MCP server(s) (${stdio.map(s => s.name).join(', ')}): ` +
++        `this pi does not support --mcp-config. ` +
++        `Install the pi MCP adapter with: pi install npm:pi-mcp-adapter`
++    )
++    return { configPath: null, warnings }
++  }
++
++  return { configPath: writeMcpConfigFile(toMcpConfigFile(stdio)), warnings }
++}
++
++/** Exposed for tests: assert the config file is written with owner-only permissions. */
++export function mcpConfigFileMode(path: string): number {
++  return statSync(path).mode & 0o777
++}
+diff --git a/src/acp/session.ts b/src/acp/session.ts
+index d2fae68..45c511f 100644
+--- a/src/acp/session.ts
++++ b/src/acp/session.ts
+@@ -34,6 +34,8 @@ type SessionCreateParams = {
+   conn: AgentSideConnection
+   fileCommands?: import('./slash-commands.js').FileSlashCommand[]
+   piCommand?: string
++  /** Per-session MCP config file (see ./mcp-config.ts); passed to the pi process. */
++  mcpConfigPath?: string | null
+ }
+ 
+ export type StopReason = 'end_turn' | 'cancelled' | 'error'
+@@ -191,7 +193,8 @@ export class SessionManager {
+     try {
+       proc = await PiRpcProcess.spawn({
+         cwd: params.cwd,
+-        piCommand: params.piCommand
++        piCommand: params.piCommand,
++        mcpConfigPath: params.mcpConfigPath ?? undefined
+       })
+     } catch (e) {
+       if (e instanceof PiRpcSpawnError) {
+diff --git a/src/pi-rpc/process.ts b/src/pi-rpc/process.ts
+index 92f7959..4635bb1 100644
+--- a/src/pi-rpc/process.ts
++++ b/src/pi-rpc/process.ts
+@@ -1,6 +1,7 @@
+ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+ import * as readline from 'node:readline'
+ import { getPiCommand, shouldUseShellForPiCommand } from './command.js'
++import { removeMcpConfigFile } from '../acp/mcp-config.js'
+ 
+ export class PiRpcSpawnError extends Error {
+   /** Underlying spawn error code, e.g. ENOENT, EACCES */
+@@ -74,6 +75,11 @@ type SpawnParams = {
+   piCommand?: string
+   /** If set, pi will persist the session to this exact file (via `--session <path>`). */
+   sessionPath?: string
++  /**
++   * Path to a per-session MCP config file (see acp/mcp-config.ts). Passed as
++   * `--mcp-config <path>`; removed again when this process is disposed.
++   */
++  mcpConfigPath?: string
+ }
+ 
+ export class PiRpcProcess {
+@@ -81,9 +87,11 @@ export class PiRpcProcess {
+   private readonly pending = new Map<string, { resolve: (v: PiRpcResponse) => void; reject: (e: unknown) => void }>()
+   private eventHandlers: Array<(ev: PiRpcEvent) => void> = []
+   private readonly preludeLines: string[] = []
++  private mcpConfigPath: string | null = null
+ 
+-  private constructor(child: ChildProcessWithoutNullStreams) {
++  private constructor(child: ChildProcessWithoutNullStreams, mcpConfigPath?: string) {
+     this.child = child
++    this.mcpConfigPath = mcpConfigPath ?? null
+ 
+     const rl = readline.createInterface({ input: child.stdout })
+     rl.on('line', line => {
+@@ -136,6 +144,7 @@ export class PiRpcProcess {
+     // (e.g. MCP extensions, prompt templates for workflows).
+     const args = ['--mode', 'rpc', '--no-themes']
+     if (params.sessionPath) args.push('--session', params.sessionPath)
++    if (params.mcpConfigPath) args.push('--mcp-config', params.mcpConfigPath)
+ 
+     const child = spawn(cmd, args, {
+       cwd: params.cwd,
+@@ -166,6 +175,7 @@ export class PiRpcProcess {
+       })
+     } catch (e: any) {
+       const code = typeof e?.code === 'string' ? e.code : undefined
++      if (params.mcpConfigPath) removeMcpConfigFile(params.mcpConfigPath)
+       if (code === 'ENOENT') {
+         throw new PiRpcSpawnError(
+           `Could not start pi: executable not found (command: ${cmd}). Pi needs to be installed before it can run in ACP clients. Install it via \`npm install -g @earendil-works/pi-coding-agent\` or ensure \`pi\` is on your PATH. Then try again.`,
+@@ -184,7 +194,7 @@ export class PiRpcProcess {
+       // leave stderr untouched; ACP clients may capture it.
+     })
+ 
+-    const proc = new PiRpcProcess(child)
++    const proc = new PiRpcProcess(child, params.mcpConfigPath)
+ 
+     // Best-effort handshake.
+     // Important: pi may emit a get_state response pointing at a sessionFile in a directory
+@@ -213,12 +223,18 @@ export class PiRpcProcess {
+   }
+ 
+   dispose(signal: NodeJS.Signals | number = 'SIGTERM'): void {
+-    if (this.child.killed) return
+-    try {
+-      this.child.kill(signal as any)
+-    } catch {
+-      // ignore
++    if (!this.child.killed) {
++      try {
++        this.child.kill(signal as any)
++      } catch {
++        // ignore
++      }
+     }
++
++    // The MCP config file's lifetime is the pi process's lifetime.
++    const mcpConfigPath = this.mcpConfigPath
++    this.mcpConfigPath = null
++    if (mcpConfigPath) removeMcpConfigFile(mcpConfigPath)
+   }
+ 
+   /**
+diff --git a/test/component/session-mcp-config.test.ts b/test/component/session-mcp-config.test.ts
+new file mode 100644
+index 0000000..b7eda77
+--- /dev/null
++++ b/test/component/session-mcp-config.test.ts
+@@ -0,0 +1,208 @@
++import test from 'node:test'
++import assert from 'node:assert/strict'
++import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import type { McpServer } from '@agentclientprotocol/sdk'
++import { PiAcpAgent } from '../../src/acp/agent.js'
++import { PiRpcProcess } from '../../src/pi-rpc/process.js'
++import { readMcpConfigFile, removeMcpConfigFile, resetMcpConfigSupportCacheForTests } from '../../src/acp/mcp-config.js'
++import { FakeAgentSideConnection, asAgentConn } from '../helpers/fakes.js'
++
++const FAKE_PI = fileURLToPath(new URL('../helpers/fake-pi.mjs', import.meta.url))
++
++function stdioServer(): McpServer {
++  // No `type` field: the TS SDK strips it for the untagged stdio variant.
++  return {
++    name: 'ptah',
++    command: '/usr/bin/ptah',
++    args: ['__bridge'],
++    env: [
++      { name: 'PTAH_BRIDGE_ADDR', value: '/tmp/sock' },
++      { name: 'PTAH_RESULT_SCHEMA', value: '{}' }
++    ]
++  } as McpServer
++}
++
++/** Point PI_ACP_PI_COMMAND at the fake pi and record every invocation's argv. */
++function useFakePi(helpHasMcpConfig: boolean): { argsFile: string; argvLines(): string[][]; restore(): void } {
++  const dir = mkdtempSync(join(tmpdir(), 'pi-acp-mcp-component-'))
++  const argsFile = join(dir, 'args.jsonl')
++  writeFileSync(argsFile, '', 'utf-8')
++
++  const prev = { ...process.env }
++  process.env.PI_ACP_PI_COMMAND = FAKE_PI
++  process.env.FAKE_PI_ARGS_FILE = argsFile
++  if (helpHasMcpConfig) delete process.env.FAKE_PI_HELP_HAS_MCP_CONFIG
++  else process.env.FAKE_PI_HELP_HAS_MCP_CONFIG = '0'
++  resetMcpConfigSupportCacheForTests()
++
++  return {
++    argsFile,
++    argvLines(): string[][] {
++      if (!existsSync(argsFile)) return []
++      return readFileSync(argsFile, 'utf-8')
++        .split('\n')
++        .filter(Boolean)
++        .map(l => JSON.parse(l) as string[])
++    },
++    restore() {
++      for (const key of Object.keys(process.env)) {
++        if (!(key in prev)) delete process.env[key]
++      }
++      Object.assign(process.env, prev)
++      resetMcpConfigSupportCacheForTests()
++      rmSync(dir, { recursive: true, force: true })
++    }
++  }
++}
++
++test('newSession wires stdio MCP servers via --mcp-config and cleans up on dispose', async () => {
++  const fake = useFakePi(true)
++  const conn = new FakeAgentSideConnection()
++  const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
++  const cwd = mkdtempSync(join(tmpdir(), 'pi-acp-mcp-cwd-'))
++
++  let response: any
++  try {
++    response = await agent.newSession({ cwd, mcpServers: [stdioServer()] } as any)
++  } finally {
++    //
++  }
++
++  // The pi spawn argv must carry the --mcp-config <path> token pair.
++  const rpcArgv = fake.argvLines().find(argv => argv.includes('--mode') && argv.includes('rpc'))
++  assert.ok(rpcArgv, 'fake pi was not spawned in rpc mode')
++
++  const idx = rpcArgv.indexOf('--mcp-config')
++  assert.ok(idx >= 0, `--mcp-config missing from spawn argv: ${JSON.stringify(rpcArgv)}`)
++  const configPath = rpcArgv[idx + 1]
++  assert.ok(typeof configPath === 'string' && configPath.length > 0, '--mcp-config has no path argument')
++  assert.ok(existsSync(configPath), 'config file missing at spawn time')
++
++  // File contents: ACP entry mapped to a direct-tool pi-mcp-adapter entry.
++  assert.deepEqual(readMcpConfigFile(configPath), {
++    mcpServers: {
++      ptah: {
++        command: '/usr/bin/ptah',
++        args: ['__bridge'],
++        env: { PTAH_BRIDGE_ADDR: '/tmp/sock', PTAH_RESULT_SCHEMA: '{}' },
++        directTools: true
++      }
++    }
++  })
++
++  // Session end: the temp config file (and its directory) is removed.
++  // (First drain newSession's deferred timers so no post-dispose writes happen.)
++  await new Promise(resolve => setTimeout(resolve, 25))
++  agent.dispose()
++  assert.equal(existsSync(configPath), false, 'config file survived session dispose')
++
++  assert.ok(response?.sessionId, 'session/new did not return a sessionId')
++  assert.equal(
++    fake.argvLines().some(argv => argv.includes('--help')),
++    true,
++    'probe did not run'
++  )
++
++  fake.restore()
++  rmSync(cwd, { recursive: true, force: true })
++})
++
++test('newSession without --mcp-config support still spawns, warns, and passes no flag', async () => {
++  const fake = useFakePi(false)
++  const conn = new FakeAgentSideConnection()
++  const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
++  const cwd = mkdtempSync(join(tmpdir(), 'pi-acp-mcp-cwd-'))
++
++  try {
++    const response = await agent.newSession({ cwd, mcpServers: [stdioServer()] } as any)
++    assert.ok(response?.sessionId, 'session/new should succeed despite dropped MCP servers')
++
++    const startupInfo = response?._meta?.piAcp?.startupInfo ?? ''
++    assert.match(startupInfo, /dropped 1 MCP server/)
++    assert.match(startupInfo, /ptah/)
++    assert.match(startupInfo, /pi install npm:pi-mcp-adapter/)
++
++    const rpcArgv = fake.argvLines().find(argv => argv.includes('--mode') && argv.includes('rpc'))
++    assert.ok(rpcArgv, 'fake pi was not spawned in rpc mode')
++    assert.equal(rpcArgv.includes('--mcp-config'), false, '--mcp-config passed to a pi without support')
++
++    await new Promise(resolve => setTimeout(resolve, 25))
++    agent.dispose()
++  } finally {
++    fake.restore()
++    rmSync(cwd, { recursive: true, force: true })
++  }
++})
++
++test('newSession without MCP servers passes no --mcp-config and stays quiet', async () => {
++  const fake = useFakePi(true)
++  const conn = new FakeAgentSideConnection()
++  const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
++  const cwd = mkdtempSync(join(tmpdir(), 'pi-acp-mcp-cwd-'))
++
++  try {
++    const response = await agent.newSession({ cwd, mcpServers: [] } as any)
++    assert.ok(response?.sessionId)
++
++    const rpcArgv = fake.argvLines().find(argv => argv.includes('--mode') && argv.includes('rpc'))
++    assert.ok(rpcArgv)
++    assert.equal(rpcArgv.includes('--mcp-config'), false, '--mcp-config passed without servers')
++
++    await new Promise(resolve => setTimeout(resolve, 25))
++    agent.dispose()
++  } finally {
++    fake.restore()
++    rmSync(cwd, { recursive: true, force: true })
++  }
++})
++
++test('restoreSession (session/load path) threads mcpServers into spawn', async () => {
++  // spawn stubbed: we only assert the params threading, not a live process.
++  const fake = useFakePi(true)
++  const spawnCalls: any[] = []
++  const originalSpawn = PiRpcProcess.spawn
++  ;(PiRpcProcess as any).spawn = async (params: any) => {
++    spawnCalls.push(params)
++    return { onEvent: () => () => {}, dispose: () => {} } as any
++  }
++
++  const conn = new FakeAgentSideConnection()
++  const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
++  ;(agent as any).store = {
++    get(sessionId: string) {
++      return sessionId.startsWith('stored-session')
++        ? { sessionId, cwd: '/tmp/store-project', sessionFile: '/tmp/store-project/session.jsonl' }
++        : null
++    },
++    upsert() {}
++  }
++
++  try {
++    await (agent as any).restoreSession('stored-session', { cwd: '/tmp/store-project', mcpServers: [stdioServer()] })
++
++    assert.equal(spawnCalls.length, 1)
++    assert.equal(spawnCalls[0].sessionPath, '/tmp/store-project/session.jsonl')
++    assert.ok(typeof spawnCalls[0].mcpConfigPath === 'string', 'mcpConfigPath not threaded to spawn')
++    assert.ok(existsSync(spawnCalls[0].mcpConfigPath), 'threaded config file does not exist')
++
++    // Unsupported pi: no config path. (Fresh session id: restoreSession
++    // short-circuits on an already-registered session.)
++    fake.restore()
++    const fakeNoFlag = useFakePi(false)
++    spawnCalls.length = 0
++    await (agent as any).restoreSession('stored-session-2', { cwd: '/tmp/store-project', mcpServers: [stdioServer()] })
++
++    assert.equal(spawnCalls.length, 1)
++    assert.equal(spawnCalls[0].mcpConfigPath, undefined, 'mcpConfigPath must be dropped without support')
++    fakeNoFlag.restore()
++  } finally {
++    PiRpcProcess.spawn = originalSpawn
++    for (const call of spawnCalls) {
++      if (typeof call?.mcpConfigPath === 'string') removeMcpConfigFile(call.mcpConfigPath)
++    }
++    fake.restore()
++  }
++})
+diff --git a/test/helpers/fake-pi.mjs b/test/helpers/fake-pi.mjs
+new file mode 100755
+index 0000000..15bd53a
+--- /dev/null
++++ b/test/helpers/fake-pi.mjs
+@@ -0,0 +1,83 @@
++#!/usr/bin/env node
++// Fake `pi` executable for tests: records its argv, answers `--help`, and
++// speaks the minimal pi RPC subset pi-acp needs during session/new.
++import { appendFileSync } from 'node:fs'
++
++const argv = process.argv.slice(2)
++
++if (process.env.FAKE_PI_ARGS_FILE) {
++  try {
++    appendFileSync(process.env.FAKE_PI_ARGS_FILE, JSON.stringify(argv) + '\n')
++  } catch {
++    // ignore recording failures
++  }
++}
++
++if (argv.includes('--help')) {
++  const lines = [
++    'Usage: pi [options]',
++    '',
++    'Options:',
++    '  --mode <value>          Run mode',
++    '  --no-themes             Disable themes',
++    '  --session <value>       Session file'
++  ]
++  // FAKE_PI_HELP_HAS_MCP_CONFIG=0 simulates a pi without the pi-mcp-adapter
++  // extension (no --mcp-config flag).
++  if (process.env.FAKE_PI_HELP_HAS_MCP_CONFIG !== '0') {
++    lines.push('  --mcp-config <value>    Path to MCP config file')
++  }
++  console.log(lines.join('\n'))
++  process.exit(0)
++}
++
++// Minimal RPC mode: newline-delimited JSON requests on stdin, responses on stdout.
++process.stdin.setEncoding('utf8')
++
++let buf = ''
++
++function respond(msg, data) {
++  process.stdout.write(JSON.stringify({ type: 'response', id: msg.id, command: msg.type, success: true, data }) + '\n')
++}
++
++function handle(line) {
++  if (!line.trim()) return
++  let msg
++  try {
++    msg = JSON.parse(line)
++  } catch {
++    return
++  }
++
++  switch (msg.type) {
++    case 'get_state':
++      respond(msg, {
++        sessionId: 'fake-pi-session',
++        sessionFile: null,
++        thinkingLevel: 'medium',
++        model: { provider: 'test', id: 'model' }
++      })
++      break
++    case 'get_available_models':
++      respond(msg, { models: [{ provider: 'test', id: 'model', name: 'model' }] })
++      break
++    case 'get_commands':
++      respond(msg, { commands: [] })
++      break
++    default:
++      respond(msg, {})
++      break
++  }
++}
++
++process.stdin.on('data', d => {
++  buf += d
++  let i
++  while ((i = buf.indexOf('\n')) >= 0) {
++    const line = buf.slice(0, i)
++    buf = buf.slice(i + 1)
++    handle(line)
++  }
++})
++
++process.stdin.on('end', () => process.exit(0))
+diff --git a/test/unit/mcp-config.test.ts b/test/unit/mcp-config.test.ts
+new file mode 100644
+index 0000000..20b76b6
+--- /dev/null
++++ b/test/unit/mcp-config.test.ts
+@@ -0,0 +1,204 @@
++import test from 'node:test'
++import assert from 'node:assert/strict'
++import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import type { McpServer, McpServerStdio } from '@agentclientprotocol/sdk'
++import {
++  filterStdioMcpServers,
++  toMcpConfigFile,
++  writeMcpConfigFile,
++  removeMcpConfigFile,
++  readMcpConfigFile,
++  mcpConfigFileMode,
++  prepareSessionMcpConfig,
++  piSupportsMcpConfig,
++  resetMcpConfigSupportCacheForTests
++} from '../../src/acp/mcp-config.js'
++
++const FAKE_PI = fileURLToPath(new URL('../helpers/fake-pi.mjs', import.meta.url))
++
++function stdioServer(overrides: Partial<McpServerStdio> = {}): McpServerStdio {
++  // Note: no `type` field — the TS SDK strips it for the untagged stdio variant.
++  return {
++    name: 'ptah',
++    command: '/usr/bin/ptah',
++    args: ['__bridge'],
++    env: [{ name: 'PTAH_BRIDGE_ADDR', value: '/tmp/sock' }],
++    ...overrides
++  }
++}
++
++function httpServer(): McpServer {
++  return { type: 'http', name: 'remote', url: 'https://mcp.example.com', headers: [] } as McpServer
++}
++
++/** Set up a fake pi invocation recorder: returns { argsFile, lines() }. */
++function recorder(): { argsFile: string; lines(): string[][] } {
++  const dir = mkdtempSync(join(tmpdir(), 'pi-acp-mcp-test-'))
++  const argsFile = join(dir, 'args.jsonl')
++  writeFileSync(argsFile, '', 'utf-8')
++  return {
++    argsFile,
++    lines(): string[][] {
++      if (!existsSync(argsFile)) return []
++      return readFileSync(argsFile, 'utf-8')
++        .split('\n')
++        .filter(Boolean)
++        .map(l => JSON.parse(l) as string[])
++    }
++  }
++}
++
++function withFakePi(
++  helpHasMcpConfig: boolean,
++  fn: (rec: { argsFile: string; lines(): string[][] }) => Promise<void> | void
++): Promise<void> {
++  const rec = recorder()
++  const prev = { ...process.env }
++  process.env.PI_ACP_PI_COMMAND = FAKE_PI
++  process.env.FAKE_PI_ARGS_FILE = rec.argsFile
++  if (helpHasMcpConfig) delete process.env.FAKE_PI_HELP_HAS_MCP_CONFIG
++  else process.env.FAKE_PI_HELP_HAS_MCP_CONFIG = '0'
++  resetMcpConfigSupportCacheForTests()
++
++  return Promise.resolve()
++    .then(() => fn(rec))
++    .finally(() => {
++      for (const key of Object.keys(process.env)) {
++        if (!(key in prev)) delete process.env[key]
++      }
++      Object.assign(process.env, prev)
++      resetMcpConfigSupportCacheForTests()
++      rmSync(join(rec.argsFile, '..'), { recursive: true, force: true })
++    })
++}
++
++test('toMcpConfigFile maps ACP stdio servers to direct-tool pi-mcp-adapter entries', () => {
++  const config = toMcpConfigFile([
++    stdioServer(),
++    stdioServer({
++      name: 'other',
++      command: 'npx',
++      args: ['a', 'b'],
++      env: [
++        { name: 'K', value: 'V' },
++        { name: 'J', value: 'W' }
++      ]
++    })
++  ])
++
++  assert.deepEqual(config, {
++    mcpServers: {
++      ptah: { command: '/usr/bin/ptah', args: ['__bridge'], env: { PTAH_BRIDGE_ADDR: '/tmp/sock' }, directTools: true },
++      other: { command: 'npx', args: ['a', 'b'], env: { K: 'V', J: 'W' }, directTools: true }
++    }
++  })
++})
++
++test('toMcpConfigFile copies args arrays defensively', () => {
++  const server = stdioServer()
++  const config = toMcpConfigFile([server])
++  ;(server as any).args.push('mutated')
++  assert.deepEqual(config.mcpServers.ptah.args, ['__bridge'])
++})
++
++test('filterStdioMcpServers keeps stdio and names dropped http/sse servers', () => {
++  const { stdio, droppedNonStdio } = filterStdioMcpServers([
++    stdioServer(),
++    httpServer(),
++    { type: 'sse', name: 'legacy', url: 'https://mcp.example.com/sse', headers: [] } as McpServer
++  ])
++
++  assert.equal(stdio.length, 1)
++  assert.equal(stdio[0].name, 'ptah')
++  assert.deepEqual(droppedNonStdio, ['remote', 'legacy'])
++})
++
++test('filterStdioMcpServers treats a defensive explicit type:"stdio" as stdio', () => {
++  const { stdio, droppedNonStdio } = filterStdioMcpServers([
++    { ...stdioServer(), type: 'stdio' } as unknown as McpServer
++  ])
++
++  assert.equal(stdio.length, 1)
++  assert.deepEqual(droppedNonStdio, [])
++})
++
++test('writeMcpConfigFile writes 0600 JSON in a fresh temp dir; removeMcpConfigFile cleans up', () => {
++  const path = writeMcpConfigFile(toMcpConfigFile([stdioServer()]))
++
++  try {
++    assert.ok(path.includes(join(tmpdir(), 'pi-acp-mcp-')), `unexpected path: ${path}`)
++    assert.equal(mcpConfigFileMode(path), 0o600)
++    assert.deepEqual(readMcpConfigFile(path), toMcpConfigFile([stdioServer()]))
++  } finally {
++    removeMcpConfigFile(path)
++  }
++
++  assert.equal(existsSync(path), false)
++})
++
++test('piSupportsMcpConfig probes --help and caches per process', async () => {
++  await withFakePi(true, async rec => {
++    assert.equal(piSupportsMcpConfig(process.env.PI_ACP_PI_COMMAND), true)
++    assert.equal(piSupportsMcpConfig(process.env.PI_ACP_PI_COMMAND), true)
++    // Second call is served from the cache: only one --help invocation recorded.
++    assert.deepEqual(rec.lines().filter(argv => argv.includes('--help')).length, 1)
++  })
++
++  await withFakePi(false, async () => {
++    assert.equal(piSupportsMcpConfig(process.env.PI_ACP_PI_COMMAND), false)
++  })
++})
++
++test('piSupportsMcpConfig is false when pi is missing', () => {
++  resetMcpConfigSupportCacheForTests()
++  try {
++    assert.equal(piSupportsMcpConfig('pi-does-not-exist-12345'), false)
++  } finally {
++    resetMcpConfigSupportCacheForTests()
++  }
++})
++
++test('prepareSessionMcpConfig: no servers means no probe and no file', async () => {
++  await withFakePi(true, async rec => {
++    const prepared = prepareSessionMcpConfig([], { piCommand: process.env.PI_ACP_PI_COMMAND })
++    assert.equal(prepared.configPath, null)
++    assert.deepEqual(prepared.warnings, [])
++    assert.deepEqual(rec.lines(), [])
++  })
++})
++
++test('prepareSessionMcpConfig: stdio servers with support write a 0600 config; http/sse warned and dropped', async () => {
++  await withFakePi(true, async () => {
++    const prepared = prepareSessionMcpConfig([stdioServer(), httpServer()], {
++      piCommand: process.env.PI_ACP_PI_COMMAND
++    })
++
++    assert.ok(prepared.configPath, 'expected a config file')
++    try {
++      assert.equal(mcpConfigFileMode(prepared.configPath!), 0o600)
++      assert.deepEqual(readMcpConfigFile(prepared.configPath!), toMcpConfigFile([stdioServer()]))
++    } finally {
++      if (prepared.configPath) removeMcpConfigFile(prepared.configPath)
++    }
++
++    assert.equal(prepared.warnings.length, 1)
++    assert.match(prepared.warnings[0], /dropped 1 non-stdio MCP server/)
++    assert.match(prepared.warnings[0], /remote/)
++  })
++})
++
++test('prepareSessionMcpConfig: without --mcp-config support servers are warned and dropped, no file', async () => {
++  await withFakePi(false, async () => {
++    const prepared = prepareSessionMcpConfig([stdioServer()], { piCommand: process.env.PI_ACP_PI_COMMAND })
++
++    assert.equal(prepared.configPath, null)
++    assert.equal(prepared.warnings.length, 1)
++    assert.match(prepared.warnings[0], /dropped 1 MCP server/)
++    assert.match(prepared.warnings[0], /ptah/)
++    assert.match(prepared.warnings[0], /--mcp-config/)
++    assert.match(prepared.warnings[0], /pi install npm:pi-mcp-adapter/)
++  })
++})
+diff --git a/test/unit/session-restore.test.ts b/test/unit/session-restore.test.ts
+index 46abe33..e80e913 100644
+--- a/test/unit/session-restore.test.ts
++++ b/test/unit/session-restore.test.ts
+@@ -80,7 +80,8 @@ test('PiAcpAgent: prompt auto-restores a missing session from SessionStore', asy
+       {
+         cwd: '/tmp/store-project',
+         sessionPath: '/tmp/store-project/session.jsonl',
+-        piCommand: process.env.PI_ACP_PI_COMMAND
++        piCommand: process.env.PI_ACP_PI_COMMAND,
++        mcpConfigPath: undefined
+       }
+     ])
+     assert.deepEqual(promptCalls, [{ message: 'hello again', images: [] }])
+@@ -173,7 +174,8 @@ test('PiAcpAgent: setSessionConfigOption auto-restores via pi session discovery
+       {
+         cwd: '/tmp/fallback-project',
+         sessionPath: sessionFile,
+-        piCommand: process.env.PI_ACP_PI_COMMAND
++        piCommand: process.env.PI_ACP_PI_COMMAND,
++        mcpConfigPath: undefined
+       }
+     ])
+     assert.deepEqual(setModelCalls, [{ provider: 'test', modelId: 'beta' }])
