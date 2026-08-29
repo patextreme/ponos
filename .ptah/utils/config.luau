@@ -7,7 +7,7 @@ export type Config = {
 }
 
 return {
-	defaultModel = "zai-custom/glm-5.3-flash",
-	judgeModel = "qwencloud/deepseek-v4-flash-0731",
-	changeName = "rename-to-ptah",
+	defaultModel = "zai/glm-5.3",
+	judgeModel = "zai/glm-5.3-flash",
+	changeName = "pi-acp-mcp-wiring",
 } :: Config

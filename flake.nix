@@ -24,6 +24,7 @@
         ./nix/toolchain.nix
         ./nix/source.nix
         ./nix/package.nix
+        ./nix/pi-acp.nix
         ./nix/devshell.nix
         ./nix/apps.nix
         ./nix/checks.nix
