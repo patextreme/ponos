@@ -1,6 +1,6 @@
 --!strict
 
-local oc: Agent = ptah.agent("opencode")
+local pi: Agent = ptah.agent("pi")
 
 export type PredicateOptions = {
 	sessionId: string,
@@ -37,7 +37,7 @@ end
 -- are capped and exhaustion is a script error.
 local function predicateAgent(predicate: string, payload: string, options: PredicateOptions): boolean
 	for attempt = 1, MAX_ATTEMPTS do
-		local session: Session = oc:session({
+		local session: Session = pi:session({
 			id = options.sessionId,
 			resultSchema = { type = "boolean" },
 		})

@@ -8,6 +8,6 @@ export type Config = {
 
 return {
 	defaultModel = "zai/glm-5.3",
-	judgeModel = "zai-coding-plan/glm-5.3-flash",
+	judgeModel = "zai/glm-5.3-flash",
 	changeName = "pi-acp-mcp-wiring",
 } :: Config
