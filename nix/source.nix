@@ -28,8 +28,9 @@
       src = ../.;
       filter = path: type:
       # Local runtime state and tooling configs — read from the
-        # invocation dir at run time, never compile inputs — with one
-        # exception: .ptah/ also holds the checked-in type definitions,
+        # invocation dir at run time, never compile inputs — and nix/,
+        # packaging only, so cargo builds stay insensitive to nix edits.
+        # One exception: .ptah/ also holds the checked-in type definitions,
         # a genuine compile input (include_str! in src/cli.rs). Keeping
         # the rest out means `nix run .` still does not rebuild when local
         # .ptah scripts/config (or editor/agent scaffolding) change.
@@ -42,6 +43,7 @@
         else
           !(pkgs.lib.elem (baseNameOf path) [
             ".git"
+            "nix"
             "target"
             ".work"
             ".pi"

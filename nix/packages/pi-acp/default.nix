@@ -3,10 +3,10 @@
 # Upstream pi-acp accepts ACP `session/new { mcpServers }` but never wires
 # them through to pi, which silently degrades ptah's typed-results contract
 # (`result = nil` for every resultSchema script). The carried patch
-# (patches/pi-acp-mcp-config.patch) materializes stdio MCP servers into a
+# (mcp-config.patch, beside this file) materializes stdio MCP servers into a
 # per-session `--mcp-config` file for pi. Upstreaming is out of scope by
 # decision, so the source is pinned to one exact rev: bumping the rev
-# requires rebasing the patch (see openspec/changes/pi-acp-mcp-wiring).
+# requires rebasing the patch — see README.md in this directory.
 {
   perSystem = {pkgs, ...}: {
     packages.pi-acp = pkgs.buildNpmPackage {
@@ -20,7 +20,7 @@
         hash = "sha256-y8QE91ZbRxzoaV8ITw95OqUEpsxkTI9eicygEF1GUFc=";
       };
 
-      patches = [../patches/pi-acp-mcp-config.patch];
+      patches = [./mcp-config.patch];
 
       nodejs = pkgs.nodejs_22;
       npmDepsHash = "sha256-/fX79XucKojL/6gZbK5eizEfrXso8rlTgiHfJffmDuY=";
