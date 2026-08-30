@@ -11,7 +11,7 @@
 
     commonArgs = {
       pname = "ptah";
-      version = (builtins.fromTOML (builtins.readFile ../crates/ptah-cli/Cargo.toml)).package.version;
+      version = (builtins.fromTOML (builtins.readFile ../../../crates/ptah-cli/Cargo.toml)).package.version;
       CARGO_BUILD_RUSTFLAGS = "-C debuginfo=0";
     };
 
@@ -21,7 +21,7 @@
     # then evaluate to the same derivation and the deps build once.
     cargoArtifacts = craneLib.buildDepsOnly (commonArgs
       // {
-        src = craneLib.cleanCargoSource ../.;
+        src = craneLib.cleanCargoSource ../../..;
       });
   in {
     # Full shared source (config.ptahSrc): the crate embeds

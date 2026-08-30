@@ -166,12 +166,13 @@ env = { PI_NO_BELL = "1" }
 which carries a patched build as a flake output:
 
 - `packages.<system>.pi-acp` — `buildNpmPackage` of pi-acp 0.0.33 pinned at
-  git rev `d1cffc0`, with `patches/pi-acp-mcp-config.patch` applied.
-  Upstream pi-acp accepts ACP `session/new { mcpServers }` but never wires
+  git rev `d1cffc0`, patched in-repo (`nix/packages/pi-acp/`): upstream
+  pi-acp accepts ACP `session/new { mcpServers }` but never wires
   them into pi, so every `resultSchema` script would silently degrade to
   `result = nil`; the patch materializes stdio servers into a per-session
   `--mcp-config` file (mode 0600, removed at session end) so the bridge
-  tool appears to the model as `ptah_result_submit`.
+  tool appears to the model as `ptah_result_submit`. Patch rationale and
+  the rev-bump/rebase workflow: `nix/packages/pi-acp/README.md`.
 - Outside the dev shell, run the adapter against a specific pi with
   `PI_ACP_PI_COMMAND` (an env entry in the agent's TOML):
 
@@ -188,7 +189,7 @@ gracefully: without support (or for ACP http/sse servers) it warns —
 "MCP: dropped N MCP server(s) …" — and drops them, and every turn
 completes with `result = nil`, exactly ptah's documented degradation path.
 Upstreaming the patch is out of scope; bumping the pinned rev requires
-rebasing `patches/pi-acp-mcp-config.patch` by hand.
+rebasing it by hand — see `nix/packages/pi-acp/README.md`.
 
 ## Permissions (headless posture)
 
@@ -592,11 +593,11 @@ ptah run examples/sequential_review.luau
   `MOCK_MCP_LIST`, `MOCK_CONFIG_OPTIONS`, `MOCK_CONFIG_REJECT`,
   `MOCK_CONFIG_UPDATE`, `MOCK_CONFIG_ECHO`, …).
 - `nix flake check` runs the entire suite in the sandbox.
-- `patches/pi-acp-mcp-config.patch` + `nix/pi-acp.nix`: the patched pi-acp
-  adapter (see "The `pi` agent" above). The patch is developed in a
-  gitignored `.work/pi-acp` clone of the pinned rev (`d1cffc0`, v0.0.33) and
-  exported with `git diff`; rev bumps require a manual rebase, and the
-  patch's own test suite lives in the clone (`npm test` there).
+- `nix/packages/pi-acp/` — the patched pi-acp adapter as a self-contained
+  package directory: `default.nix` (pinned rev, v0.0.33), `mcp-config.patch`,
+  and `README.md` with the patch rationale and rebase workflow (see "The
+  `pi` agent" above). The patch is developed in a gitignored `.work/pi-acp`
+  clone of the pinned rev and exported with `git diff`.
 - Toolchain: pinned nightly in `rust-toolchain.toml`, consumed by the oxalica
   overlay for devshell and crane builds.
 - **NixOS note:** vendor binaries shipped inside npm packages (e.g. the

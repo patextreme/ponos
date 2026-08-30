@@ -19,7 +19,7 @@
       CARGO_BUILD_RUSTFLAGS = "-C debuginfo=0";
     };
 
-    # Same derivation as in package.nix (keep the arguments
+    # Same derivation as in packages/ptah/default.nix (keep the arguments
     # byte-identical): dependencies build once and are shared between
     # the release package and the test suite.
     cargoArtifacts = craneLib.buildDepsOnly (commonArgs
