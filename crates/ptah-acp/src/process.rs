@@ -8,6 +8,7 @@ use agent_client_protocol::schema::v1::{EnvVariable, McpServer, McpServerStdio};
 
 use ptah_core::config::AgentSpec;
 use ptah_core::events::SessionEvent;
+use ptah_core::groups::ProcessGroups;
 use ptah_core::ports::EventSink;
 
 use super::SessionError;
@@ -25,11 +26,16 @@ pub(super) struct AgentProcess {
 }
 
 /// Start one agent subprocess as described by `spec` (attributed to
-/// `label`) and pump its stderr to the sink line by line.
+/// `label`) and pump its stderr to the sink line by line. The child's
+/// group-leader pid is registered in `groups` (when present) the
+/// moment `spawn_process` succeeds, so even a session that dies
+/// before its driver stands up leaves nothing for the outer signal
+/// sweep to miss.
 pub(super) fn spawn(
     spec: &AgentSpec,
     label: &str,
     sink: Arc<dyn EventSink>,
+    groups: Option<&Arc<ProcessGroups>>,
 ) -> Result<AgentProcess, SessionError> {
     let env = spec
         .env
@@ -48,6 +54,9 @@ pub(super) fn spawn(
         .spawn_process()
         .map_err(|e| SessionError::Spawn(format!("`{}`: {e}", spec.command)))?;
     let pid = child.id();
+    if let Some(groups) = groups {
+        groups.register(pid);
+    }
 
     let stderr_label = label.to_string();
     let stderr_sink = sink;
@@ -70,14 +79,23 @@ pub(super) fn spawn(
 }
 
 /// Kill the child's whole process group (agents are commonly launched via
-/// `npx`-style wrappers) and reap it so no zombie remains.
-pub(super) async fn kill_and_reap(mut child: async_process::Child) {
+/// `npx`-style wrappers) and reap it so no zombie remains. `groups`, when
+/// present, is the kill registry the pid was registered in: the entry
+/// leaves before the reap, so a registered pid is always live or an
+/// unreaped zombie — never one the OS has recycled.
+pub(super) async fn kill_and_reap(
+    mut child: async_process::Child,
+    groups: Option<&ProcessGroups>,
+) {
+    let pid = child.id();
     #[cfg(unix)]
     unsafe {
-        let pid = child.id() as i32;
         // The child is its own process-group leader (spawn sets this).
-        libc::kill(-pid, libc::SIGKILL);
+        libc::kill(-(pid as i32), libc::SIGKILL);
     }
     let _ = child.kill();
+    if let Some(groups) = groups {
+        groups.deregister(pid);
+    }
     let _ = child.status().await; // reap
 }

@@ -9,51 +9,95 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
+use ptah_core::groups::ProcessGroups;
 use ptah_core::ports::{ExecError, ExecOutcome, ProcessRunner};
 
-/// The `ProcessRunner` used by the `ptah` CLI (stateless: every call
-/// spawns its own child and group).
-pub struct TokioProcessRunner;
+/// The `ProcessRunner` used by the `ptah` CLI: every call spawns its
+/// own child and group. Holds the run's process-group registry (when
+/// injected) so the composition root's second-signal sweep can reach
+/// exec children teardown has not drained yet.
+pub struct TokioProcessRunner {
+    groups: Option<Arc<ProcessGroups>>,
+}
+
+impl TokioProcessRunner {
+    /// An untracked runner: execs spawn and tear down normally, but
+    /// nothing records their pids for an outer-signal sweep (tests,
+    /// embedders that install no monitor).
+    pub fn new() -> Self {
+        Self { groups: None }
+    }
+
+    /// A runner registering every spawned exec's group-leader pid in
+    /// `groups` for the command's lifetime — the registry handle the
+    /// composition-root signal monitor sweeps on the force escape.
+    pub fn with_registry(groups: Arc<ProcessGroups>) -> Self {
+        Self {
+            groups: Some(groups),
+        }
+    }
+}
+
+impl Default for TokioProcessRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Kills the whole process group on drop (or on [`GroupKillGuard::kill_now`])
-/// unless disarmed. The child is its own group leader — spawned with
+/// unless disarmed, and deregisters the pid from the kill registry on
+/// every exit path. The child is its own group leader — spawned with
 /// `process_group(0)` — so `-pid` reaches every process the command went
 /// on to spawn, not just the shell.
 struct GroupKillGuard {
-    pid: Option<u32>,
+    /// The group leader's pid — deregistration needs it even after the
+    /// kill is disarmed.
+    pid: u32,
+    /// Whether the group still needs killing (natural exit disarms).
+    armed: bool,
+    /// The run's kill registry (`None`: this exec spawned untracked).
+    groups: Option<Arc<ProcessGroups>>,
 }
 
 impl GroupKillGuard {
-    fn new(pid: u32) -> Self {
-        Self { pid: Some(pid) }
+    fn new(pid: u32, groups: Option<Arc<ProcessGroups>>) -> Self {
+        Self {
+            pid,
+            armed: true,
+            groups,
+        }
     }
 
     /// Send SIGKILL to the group and disarm (a second kill is pointless;
     /// the disarm also marks the normal-exit path).
     fn kill_now(&mut self) {
-        if let Some(pid) = self.pid.take() {
+        if self.armed {
+            self.armed = false;
             #[cfg(unix)]
             unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = pid;
+                libc::kill(-(self.pid as i32), libc::SIGKILL);
             }
         }
     }
 
     /// The command ended on its own: there is nothing to kill.
     fn disarm(&mut self) {
-        self.pid = None;
+        self.armed = false;
     }
 }
 
 impl Drop for GroupKillGuard {
     fn drop(&mut self) {
         self.kill_now();
+        // Registry bookkeeping rides every exit path: natural completion
+        // disarmed the kill above, but the pid must still leave the
+        // sweep set before the OS can hand it out again.
+        if let Some(groups) = &self.groups {
+            groups.deregister(self.pid);
+        }
     }
 }
 
@@ -87,7 +131,10 @@ impl ProcessRunner for TokioProcessRunner {
                 .spawn()
                 .map_err(|e| ExecError::Spawn(format!("`{cmd}`: {e}")))?;
             let pid = child.id().expect("child spawned");
-            let mut guard = GroupKillGuard::new(pid);
+            if let Some(groups) = &self.groups {
+                groups.register(pid);
+            }
+            let mut guard = GroupKillGuard::new(pid, self.groups.clone());
             let mut stdout = child.stdout.take().expect("stdout piped");
             let mut stderr = child.stderr.take().expect("stderr piped");
 
@@ -156,7 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn runs_pipeline_and_captures_output() {
-        let out = TokioProcessRunner
+        let out = TokioProcessRunner::new()
             .run("printf 'a\\nb' | wc -l", None)
             .await
             .unwrap();
@@ -167,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn nonzero_exit_and_stderr_are_data() {
-        let out = TokioProcessRunner
+        let out = TokioProcessRunner::new()
             .run("echo boom >&2; exit 3", None)
             .await
             .unwrap();
@@ -179,7 +226,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_kills_and_reports() {
         let started = std::time::Instant::now();
-        let out = TokioProcessRunner.run("sleep 30", Some(100)).await.unwrap();
+        let out = TokioProcessRunner::new().run("sleep 30", Some(100)).await.unwrap();
         assert!(out.timed_out);
         assert_eq!(out.exit_code, None);
         assert!(
@@ -192,7 +239,7 @@ mod tests {
     async fn signal_death_normalizes_to_shell_convention() {
         // The shell itself is killed by a signal: normalized to 128+sig
         // so `exit_code` is `Some` for every command that ran.
-        let out = TokioProcessRunner.run("kill -9 $$", None).await.unwrap();
+        let out = TokioProcessRunner::new().run("kill -9 $$", None).await.unwrap();
         assert_eq!(out.exit_code, Some(137));
     }
 
@@ -200,7 +247,7 @@ mod tests {
     async fn stdin_is_eof_not_the_terminal() {
         // `cat` reads stdin until EOF; with stdin nulled it exits at once.
         let started = std::time::Instant::now();
-        let out = TokioProcessRunner.run("cat", Some(5_000)).await.unwrap();
+        let out = TokioProcessRunner::new().run("cat", Some(5_000)).await.unwrap();
         assert_eq!(out.exit_code, Some(0));
         assert_eq!(out.stdout, "");
         assert!(
@@ -213,7 +260,7 @@ mod tests {
     async fn env_and_cwd_are_inherited() {
         // SAFETY: single-threaded test; the var is ours.
         unsafe { std::env::set_var("PTAH_EXEC_TEST_TOKEN", "tok-42") };
-        let out = TokioProcessRunner
+        let out = TokioProcessRunner::new()
             .run("printf %s \"$PTAH_EXEC_TEST_TOKEN\"; pwd", None)
             .await
             .unwrap();
@@ -224,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn child_filling_a_pipe_does_not_deadlock() {
         // 1 MB through the pipe: concurrent reads + wait must drain it.
-        let out = TokioProcessRunner
+        let out = TokioProcessRunner::new()
             .run(
                 "yes 0123456789 | head -c 1048576 >/dev/null; echo done",
                 None,

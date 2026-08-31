@@ -212,15 +212,24 @@ pub fn main() -> ExitCode {
     // shell through the headless allow-all agent posture).
     // Outer cancellation channel: SIGINT/SIGTERM forward into it below
     // (first signal — teardown rides inside `run`, exit code 130/143;
-    // second signal — exit at once). Created before the runtime so the
-    // config is complete here; the monitor task is spawned inside it.
+    // second signal — kill every registered child group, then exit at
+    // once). Created before the runtime so the config is complete
+    // here; the monitor task is spawned inside it.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(0);
+    // The run's child-group registry: agent sessions (via the
+    // transport) and exec children (via the process runner) register
+    // their group-leader pids here, and only the second signal ever
+    // reads it — teardown keeps its own kill paths. One instance, one
+    // run: this is the map the force escape sweeps.
+    let groups = std::sync::Arc::new(ptah_core::groups::ProcessGroups::new());
     let config = RunConfig {
         script_path: script,
         invocation_dir,
         registry,
-        transport: std::sync::Arc::new(ptah_acp::Transport),
-        process_runner: Some(std::sync::Arc::new(crate::exec::TokioProcessRunner)),
+        transport: std::sync::Arc::new(ptah_acp::Transport::with_registry(groups.clone())),
+        process_runner: Some(std::sync::Arc::new(
+            crate::exec::TokioProcessRunner::with_registry(groups.clone()),
+        )),
         shutdown: Some(shutdown_rx),
         renderer,
     };
@@ -238,7 +247,7 @@ pub fn main() -> ExitCode {
     // world-touching composition decision, so it is installed here —
     // the run loop itself only sees the channel.
     let outcome = rt.block_on(async {
-        let signal_monitor = install_signal_monitor(shutdown_tx);
+        let signal_monitor = install_signal_monitor(shutdown_tx, groups);
         let outcome = tokio::task::LocalSet::new()
             .run_until(script::run(config))
             .await;
@@ -260,14 +269,17 @@ pub fn main() -> ExitCode {
 
 /// Install the SIGINT/SIGTERM monitor forwarding into the run's
 /// shutdown watch. The first signal sends the shell-conventional code
-/// (130/143) — the run then tears itself down — and any later signal
-/// exits immediately (the "press again to force" escape for a stuck
-/// teardown). Returns the monitor task, aborted when the run ends on
-/// its own so a late signal cannot kill a finishing process. Non-unix
-/// platforms have no such signals: no monitor, and a dropped sender
-/// the run reads as "nobody will ever cancel".
+/// (130/143) — the run then tears itself down — and a second signal
+/// during that teardown kills every process group still in `groups`
+/// (agent and exec children alike) before the immediate exit, with
+/// the exit code matching *that* signal. Returns the monitor task,
+/// aborted when the run ends on its own so a late signal cannot kill
+/// a finishing process. Non-unix platforms have no such signals: no
+/// monitor, and a dropped sender the run reads as "nobody will ever
+/// cancel".
 fn install_signal_monitor(
     shutdown_tx: tokio::sync::watch::Sender<i32>,
+    groups: std::sync::Arc<ptah_core::groups::ProcessGroups>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     #[cfg(unix)]
     {
@@ -286,18 +298,44 @@ fn install_signal_monitor(
             };
             let _ = shutdown_tx.send(code);
             // A second signal means the user wants out *now*: teardown
-            // is still draining — exit hard with the interrupt code.
-            tokio::select! {
-                _ = int.recv() => {}
-                _ = term.recv() => {}
-            }
-            std::process::exit(130);
+            // is still draining and no destructor will run on the hard
+            // exit — kill every registered child group first, then exit
+            // with the code of the signal that fired (a second SIGTERM
+            // reports 143, not the old hardcoded 130).
+            let second = tokio::select! {
+                _ = int.recv() => 130,
+                _ = term.recv() => 143,
+            };
+            kill_registered_groups(&groups);
+            std::process::exit(second);
         }))
     }
     #[cfg(not(unix))]
     {
         drop(shutdown_tx);
+        drop(groups);
         None
+    }
+}
+
+/// SIGKILL every process group in the registry's snapshot: the second
+/// signal's escape hatch. Raw and idempotent — an entry whose group
+/// is already dead yields `ESRCH`, ignored — and deliberately
+/// synchronous: this must run exactly when the async runtime is too
+/// wedged to drain. No reap: the killed groups are re-parented to
+/// init, which reaps them; nothing observable leaks.
+fn kill_registered_groups(groups: &ptah_core::groups::ProcessGroups) {
+    for pid in groups.snapshot() {
+        #[cfg(unix)]
+        // SAFETY: raw kill(2) on pids this run spawned as group
+        // leaders; a stale entry only yields ESRCH (no-op).
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = pid;
+        }
     }
 }
 
@@ -409,5 +447,39 @@ mod tests {
             err.contains(crate::VERSION) || err.contains("version"),
             "{err}"
         );
+    }
+
+    /// The second-signal sweep, pinned on a real child: spawn `sleep`
+    /// as its own process-group leader (exactly how both the ACP
+    /// transport and the exec runner spawn children), register it,
+    /// sweep, assert the kill landed. No async anywhere — the sweep
+    /// must work precisely when the runtime is too wedged to drain.
+    #[cfg(unix)]
+    #[test]
+    fn sweep_kills_registered_process_groups() {
+        use std::os::unix::process::CommandExt;
+
+        let groups = ptah_core::groups::ProcessGroups::new();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        groups.register(child.id());
+
+        kill_registered_groups(&groups);
+
+        let status = child.wait().expect("wait sleep");
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "sweep must SIGKILL the registered group: {status:?}"
+        );
+        // A swept (dead) entry is harmless bookkeeping, not an error.
+        assert_eq!(groups.snapshot(), vec![child.id()]);
+        kill_registered_groups(&groups); // idempotent: ESRCH ignored
+        groups.deregister(child.id());
+        assert!(groups.snapshot().is_empty());
     }
 }

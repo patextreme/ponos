@@ -46,10 +46,10 @@ fn run_with_registry(
         script_path: script.to_path_buf(),
         invocation_dir: dir.to_path_buf(),
         registry,
-        transport: std::sync::Arc::new(ptah::acp::Transport),
+        transport: std::sync::Arc::new(ptah::acp::Transport::new()),
         // The CLI always injects the tokio runner; the suite runs the
         // same composition so `ptah.exec` behaves identically here.
-        process_runner: Some(Arc::new(TokioProcessRunner)),
+        process_runner: Some(Arc::new(TokioProcessRunner::new())),
         shutdown: None,
         renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
     };

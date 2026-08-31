@@ -19,6 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use ptah_core::config::AgentSpec;
 use ptah_core::events::{PlanEntry, PlanStatus, SessionEvent};
+use ptah_core::groups::ProcessGroups;
 use ptah_core::ports::{
     AgentTransport, BridgeConfig, EventSink, HeadlessPolicy, InteractionPolicy,
 };
@@ -41,7 +42,20 @@ pub async fn start_session(
     opts: SessionOptions,
     sink: Arc<dyn EventSink>,
 ) -> Result<SessionHandle, SessionError> {
-    let proc = process::spawn(spec, &opts.label, sink.clone())?;
+    start_session_inner(spec, opts, sink, None).await
+}
+
+/// The registry-tracking core of [`start_session`]: `groups` (when
+/// present) registers the spawned agent's group-leader pid for the
+/// composition root's second-signal sweep, and the driver deregisters
+/// it when it disposes of the child.
+async fn start_session_inner(
+    spec: &AgentSpec,
+    opts: SessionOptions,
+    sink: Arc<dyn EventSink>,
+    groups: Option<Arc<ProcessGroups>>,
+) -> Result<SessionHandle, SessionError> {
+    let proc = process::spawn(spec, &opts.label, sink.clone(), groups.as_ref())?;
     let process::AgentProcess {
         stdin,
         stdout,
@@ -126,6 +140,7 @@ pub async fn start_session(
     let driver_fold = fold.clone();
     let driver_sink = sink.clone();
     let driver_config = config_options.clone();
+    let driver_groups = groups;
 
     // Headless permission posture for this session's agent→client
     // requests; the policy is the seam an interactive front end replaces.
@@ -251,7 +266,7 @@ pub async fn start_session(
         if let Err(e) = result {
             tracing::debug!(%e, "agent connection ended");
         }
-        kill_and_reap(child_guard).await;
+        kill_and_reap(child_guard, driver_groups.as_deref()).await;
         // Drain the stderr pump so -vv passthrough is complete before the
         // session is reported closed.
         let _ = stderr_task.await;
@@ -300,7 +315,35 @@ pub async fn start_session(
 
 /// The ACP stdio transport: [`AgentTransport`] over the process/proto/
 /// driver interior.
-pub struct Transport;
+pub struct Transport {
+    /// Where every spawned agent's group-leader pid is registered for
+    /// the composition root's second-signal sweep. `None`: untracked
+    /// (tests, embedders that install no monitor).
+    groups: Option<Arc<ProcessGroups>>,
+}
+
+impl Transport {
+    /// An untracked transport: sessions spawn and tear down normally,
+    /// but nothing records their pids for an outer-signal sweep.
+    pub fn new() -> Self {
+        Self { groups: None }
+    }
+
+    /// A transport registering every spawned agent's group-leader pid
+    /// in `groups` for the run's lifetime — the registry handle the
+    /// composition-root signal monitor sweeps on the force escape.
+    pub fn with_registry(groups: Arc<ProcessGroups>) -> Self {
+        Self {
+            groups: Some(groups),
+        }
+    }
+}
+
+impl Default for Transport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AgentTransport for Transport {
     fn start_session<'a>(
@@ -309,7 +352,12 @@ impl AgentTransport for Transport {
         opts: SessionOptions,
         sink: Arc<dyn EventSink>,
     ) -> Pin<Box<dyn Future<Output = Result<SessionHandle, SessionError>> + 'a>> {
-        Box::pin(start_session(spec, opts, sink))
+        Box::pin(start_session_inner(
+            spec,
+            opts,
+            sink,
+            self.groups.clone(),
+        ))
     }
 }
 

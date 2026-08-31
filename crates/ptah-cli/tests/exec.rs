@@ -112,7 +112,7 @@ fn exec_lua(runner: Option<Arc<dyn ProcessRunner>>, sink: Arc<dyn EventSink>) ->
         script_path: dir.join("main.luau"),
         invocation_dir: dir,
         registry: config_fs::from_parts(None, None).unwrap(),
-        transport: Arc::new(ptah::acp::Transport),
+        transport: Arc::new(ptah::acp::Transport::new()),
         process_runner: runner,
         shutdown: None,
         renderer: sink,

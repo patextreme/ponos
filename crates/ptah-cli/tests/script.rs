@@ -17,7 +17,7 @@ fn test_lua(script_dir: &std::path::Path) -> Lua {
         script_path: script_dir.join("main.luau"),
         invocation_dir: script_dir.to_path_buf(),
         registry: ptah::config_fs::from_parts(None, None).unwrap(),
-        transport: std::sync::Arc::new(ptah::acp::Transport),
+        transport: std::sync::Arc::new(ptah::acp::Transport::new()),
         process_runner: None,
         shutdown: None,
         renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
