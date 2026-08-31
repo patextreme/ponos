@@ -20,6 +20,7 @@ pub mod config;
 pub mod contract;
 pub mod error;
 pub mod events;
+pub mod groups;
 pub mod ports;
 pub mod session;
 pub mod task;

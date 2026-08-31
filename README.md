@@ -376,9 +376,11 @@ The contract:
  output.
 - **Teardown is guaranteed**: a script error, `ptah.exit`, or run
  cancellation (Ctrl-C: the first SIGINT/SIGTERM runs the same teardown
- and exits `128+signal`; a second signal exits immediately) kills every
- in-flight command's process group — no orphaned children outlive the
- run.
+ and exits `128+signal`; a second signal kills every still-running
+ agent and exec child's process group before the immediate exit, which
+ carries that signal's code — Unix only, signal handling is a
+ Unix-only contract) kills every in-flight command's process group —
+ no orphaned children outlive the run.
 
 The session id `exec` is reserved (it attributes exec lifecycle lines at
 the event sink): `agent:session({ id = "exec" })` is rejected at

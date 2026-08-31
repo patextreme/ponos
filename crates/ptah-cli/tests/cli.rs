@@ -1188,6 +1188,244 @@ ptah.log("parked")
     common::wait_for_processes(tag, 0, "drain teardown killed the in-flight exec");
 }
 
+/// Drive one `ptah run` with a hung agent turn (MOCK_HANG: the agent
+/// never finishes the prompt on its own), deliver `sig` once the turn
+/// is in flight, and check the cancelled run: exit code and — the leg
+/// today's signal tests never covered — no surviving agent process.
+/// The agent's argv carries `tag` so /proc can find exactly this run's
+/// agent (the mock ignores unknown args).
+#[cfg(unix)]
+fn signal_cancels_the_run_killing_the_agent(
+    sig: i32,
+    expected_code: i32,
+    name: &str,
+    tag: &str,
+) {
+    use std::io::BufRead;
+    use std::process::Stdio;
+
+    // A previously failed run may have leaked this tag's agent; sweep
+    // it first so the final no-survivor assertion is about *this* run.
+    common::kill_processes(tag);
+    common::wait_for_processes(tag, 0, "stale tag cleared before the run");
+
+    // `name` (not the tag) keys the dir: ptah's own cmdline must stay
+    // tag-free so /proc counts exactly the agent.
+    let dir =
+        std::env::temp_dir().join(format!("ptah-cli-signal-agent-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".ptah")).unwrap();
+    std::fs::write(
+        dir.join(".ptah").join("config.toml"),
+        format!(
+            "[agents.mock]\ncommand = \"{}\"\nargs = [\"{tag}\"]\n\n[agents.mock.env]\nMOCK_HANG = '1'\n",
+            mock_bin()
+        ),
+    )
+    .unwrap();
+    let script = dir.join("main.luau");
+    std::fs::write(
+        &script,
+        "local s = ptah.agent(\"mock\"):session()\ns:prompt(\"hang\")\n",
+    )
+    .unwrap();
+
+    let mut child = std::process::Command::new(ptah_bin())
+        .arg("run")
+        .arg("--no-color")
+        .arg(&script)
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ptah");
+
+    // The prompt line renders at send time, so it proves the turn (and
+    // the agent behind it) is in flight before the signal lands.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let stdout = child.stdout.take().expect("piped stdout");
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            if tx.send(line.expect("read stdout")).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = String::new();
+    loop {
+        let line = rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("agent turn never started");
+        seen.push_str(&line);
+        seen.push('\n');
+        if line.contains("prompt: hang") {
+            break;
+        }
+    }
+    assert_eq!(
+        common::count_processes(tag),
+        1,
+        "agent must be alive and tagged before the signal"
+    );
+
+    // The signal reaches ptah only — the agent runs in its own process
+    // group, out of a terminal signal's reach — so a surviving agent
+    // after this would be ptah's teardown failing, not the OS.
+    unsafe { libc::kill(child.id() as i32, sig) };
+
+    while let Ok(line) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        seen.push_str(&line);
+        seen.push('\n');
+    }
+    let status = child.wait().expect("wait ptah");
+    assert_eq!(
+        status.code(),
+        Some(expected_code),
+        "cancelled run must exit {expected_code}; output:\n{seen}"
+    );
+    common::wait_for_processes(tag, 0, "signal teardown killed the agent");
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_cancels_the_run_kills_the_agent_and_exits_130() {
+    // agent-sessions "Processes are torn down at run end", the Ctrl-C
+    // leg: the agent sits in its own process group where the terminal
+    // signal cannot reach it; teardown must kill and reap it before
+    // the 130 exit (SIGTERM likewise → 143).
+    signal_cancels_the_run_killing_the_agent(libc::SIGINT, 130, "int", "8846");
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_cancels_the_run_killing_the_agent_and_exits_143() {
+    signal_cancels_the_run_killing_the_agent(libc::SIGTERM, 143, "term", "8847");
+}
+
+#[cfg(unix)]
+#[test]
+fn second_signal_sweeps_agents_and_execs_then_exits_with_its_code() {
+    // The force escape: a first signal starts teardown, a second one
+    // lands while teardown is still draining (the exec drain and the
+    // session joins take ~7-11ms; the monitor re-arms within
+    // microseconds of the first signal, so a short gap keeps the
+    // second inside the window). No destructor runs on the hard exit —
+    // the sweep must kill the hung agent's group and the tagged exec
+    // group itself, and the exit code must match the *second* signal
+    // (SIGTERM → 143, previously hardcoded 130). If teardown happens
+    // to win the race the assertions still hold: the children are
+    // just as dead, killed by teardown instead.
+    use std::io::BufRead;
+    use std::process::Stdio;
+
+    let agent_tag = "8848";
+    let exec_tag = "8849";
+    common::kill_processes(agent_tag);
+    common::kill_processes(exec_tag);
+    common::wait_for_processes(agent_tag, 0, "stale agent tag cleared");
+    common::wait_for_processes(exec_tag, 0, "stale exec tag cleared");
+
+    let dir = std::env::temp_dir().join(format!("ptah-cli-signal-sweep-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".ptah")).unwrap();
+    std::fs::write(
+        dir.join(".ptah").join("config.toml"),
+        format!(
+            "[agents.mock]\ncommand = \"{}\"\nargs = [\"{agent_tag}\"]\n\n[agents.mock.env]\nMOCK_HANG = '1'\n",
+            mock_bin()
+        ),
+    )
+    .unwrap();
+    let script = dir.join("main.luau");
+    std::fs::write(
+        &script,
+        format!(
+            "local s = ptah.agent(\"mock\"):session()\n\
+             ptah.spawn(function() return ptah.exec(\"sleep {exec_tag}\") end)\n\
+             s:prompt(\"hang\")\n"
+        ),
+    )
+    .unwrap();
+
+    let mut child = std::process::Command::new(ptah_bin())
+        .arg("run")
+        .arg("--no-color")
+        .arg(&script)
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ptah");
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let stdout = child.stdout.take().expect("piped stdout");
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            if tx.send(line.expect("read stdout")).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = String::new();
+    loop {
+        let line = rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("run never parked");
+        seen.push_str(&line);
+        seen.push('\n');
+        // The spawned exec and the main body's prompt race each other
+        // onto the screen (either order); both must be in flight before
+        // signaling.
+        if seen.contains("prompt: hang")
+            && seen.contains(&format!("exec: sleep {exec_tag}"))
+        {
+            break;
+        }
+    }
+    assert_eq!(common::count_processes(agent_tag), 1, "agent alive");
+    // The exec child may be mid-`execve` (sh exec'ing into sleep),
+    // when /proc cmdline reads can come back empty — retry briefly
+    // before declaring it alive.
+    let mut exec_alive = false;
+    for _ in 0..100 {
+        if common::count_processes(exec_tag) >= 1 {
+            exec_alive = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(exec_alive, "exec child alive (sh may have exec'd into sleep)");
+
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+        // Short gap, sized to the measured teardown window (~7-11ms,
+        // floored at 5ms by the exec drain's poll step). Both signals
+        // are SIGTERM on purpose: whichever way the race resolves the
+        // observable outcome is 143 — the second signal delivered
+        // separately fires the sweep and exit(143); the second
+        // kernel-coalesced into the first rides normal teardown's
+        // 143 — while the old hardcoded-130 hard exit fails the test
+        // whenever the second signal lands (the common case at this
+        // gap).
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+
+    while let Ok(line) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        seen.push_str(&line);
+        seen.push('\n');
+    }
+    let status = child.wait().expect("wait ptah");
+    assert_eq!(
+        status.code(),
+        Some(143),
+        "the hard exit must carry the second signal's code (SIGTERM → 143); \
+         output:\n{seen}"
+    );
+    common::wait_for_processes(agent_tag, 0, "second-signal sweep killed the agent");
+    common::wait_for_processes(exec_tag, 0, "second-signal sweep killed the exec");
+}
+
 #[test]
 fn teardown_cancelled_exec_renders_start_but_no_end_line() {
     // shell-exec "Exec lifecycle is observable": an exec cancelled by

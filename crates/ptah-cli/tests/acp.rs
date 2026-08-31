@@ -541,7 +541,7 @@ fn run_script(name: &str, body: &str) -> ptah::script::RunOutcome {
         script_path: script,
         invocation_dir: dir,
         registry: ptah::config_fs::from_parts(None, None).unwrap(),
-        transport: std::sync::Arc::new(ptah::acp::Transport),
+        transport: std::sync::Arc::new(ptah::acp::Transport::new()),
         process_runner: None, // exec is not under test here
         shutdown: None,
         renderer: Arc::new(Renderer::new(RenderOptions::quiet())),
