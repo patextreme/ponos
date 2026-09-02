@@ -44,10 +44,14 @@ owns its own agent subprocess; closing a session reaps the process.
    (lifecycle), `-vv` (also forwards agent subprocess stderr),
    `--no-color` (plain text), `--quiet` (suppress rendering; script
    `print` still passes through).
-6. Optional, when luau-lsp is available for editor/type support:
-   `ptah types > ptah.d.luau` and configure luau-lsp with platform
-   `standard`. Definitions are workspace-wide — keep the file out of
-   mixed Luau projects not run under ptah.
+6. Optional, when luau-lsp is available for editor/type support: run
+   `ptah init` — it writes `.ptah/ptah.d.luau` (definitions matching
+   the installed binary) and a commented `.ptah/config.toml` skeleton
+   in `./.ptah/`, skipping files that already exist — then configure
+   luau-lsp (platform `standard`) to use `.ptah/ptah.d.luau`.
+   Definitions are workspace-wide — keep them out of mixed Luau
+   projects not run under ptah. After upgrading ptah, refresh with
+   `ptah types > .ptah/ptah.d.luau`.
 
 ## Script rules (the sandbox)
 

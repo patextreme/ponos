@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 use crate::render::{RenderOptions, Renderer};
 use crate::script::{self, RunConfig};
@@ -49,6 +50,15 @@ enum Command {
     /// Print the Luau type definitions for the ptah script API.
     Types,
 
+    /// Print a shell completion script for the ptah CLI.
+    Completions {
+        /// Shell to generate a completion script for.
+        shell: Shell,
+    },
+
+    /// Scaffold ./.ptah/ (type definitions + agent registry skeleton).
+    Init,
+
     /// Hidden: MCP bridge server for typed results. Spawned per result
     /// session by the agent, as suggested in `session/new { mcpServers }`;
     /// not part of the user-facing surface.
@@ -68,6 +78,12 @@ enum Parsed {
     },
     /// `ptah types` — print definitions, exit 0, touch nothing else.
     Types,
+    /// `ptah completions <shell>` — print a completion script generated
+    /// from the live command tree, exit 0, touch nothing else.
+    Completions(Shell),
+    /// `ptah init` — scaffold ./.ptah/ (definitions + registry
+    /// skeleton), exit 0 unless writing fails.
+    Init,
     /// `ptah check` — verify a script without executing it.
     Check { script: PathBuf, no_color: bool },
     /// `ptah __bridge` — typed-results MCP server over stdio.
@@ -94,6 +110,8 @@ fn parse(args: &[String]) -> Result<Parsed, clap::Error> {
             verbose,
         },
         Command::Types => Parsed::Types,
+        Command::Completions { shell } => Parsed::Completions(shell),
+        Command::Init => Parsed::Init,
         Command::Check { script, no_color } => Parsed::Check { script, no_color },
         Command::Bridge => Parsed::Bridge,
     })
@@ -103,8 +121,140 @@ fn parse(args: &[String]) -> Result<Parsed, clap::Error> {
 /// after line 1 is byte-identical to `.ptah/ptah.d.luau`. Requires no
 /// script, registry, or agent configuration.
 fn print_types() -> ExitCode {
-    println!("-- ptah {} type definitions", crate::VERSION);
-    print!("{}", crate::check::defs::TYPE_DEFINITIONS);
+    print!("{}", definitions_bytes());
+    ExitCode::SUCCESS
+}
+
+/// The definitions exactly as `ptah types` prints them and exactly as
+/// `ptah init` writes `.ptah/ptah.d.luau`: one version-header line plus
+/// the embedded file (which ends with a trailing newline), so the
+/// command's stdout and the scaffolded file are byte-identical by
+/// construction.
+fn definitions_bytes() -> String {
+    format!(
+        "-- ptah {} type definitions\n{}",
+        crate::VERSION,
+        crate::check::defs::TYPE_DEFINITIONS
+    )
+}
+
+/// `ptah completions <shell>`: print the completion script for the named
+/// shell and nothing else. Generated from this binary's own command tree
+/// so the emitted script always matches the installed surface. Requires no
+/// script, registry, or agent configuration and never touches the
+/// filesystem.
+fn print_completions(shell: Shell) -> ExitCode {
+    let mut cmd = completion_command();
+    clap_complete::generate(shell, &mut cmd, "ptah", &mut std::io::stdout());
+    ExitCode::SUCCESS
+}
+
+/// The completion source tree: the live `Cli` command with hidden
+/// subcommands stripped. clap_complete does not omit `hide`-flagged
+/// subcommands (verified against 4.6), so the internal `__bridge`
+/// command would otherwise leak into every emitted script. Everything
+/// else — args, help text, new visible subcommands — still derives from
+/// the live struct, so emitted scripts cannot drift from the binary.
+fn completion_command() -> clap::Command {
+    let mut full = Cli::command();
+    // `Cli` pins `name = "ptah"` and derives `version` from the
+    // `&'static` `VERSION` const; clap's `Str` accepts only `'static`
+    // strings, so the rebuild re-states both rather than borrowing off
+    // `full`.
+    let mut visible = clap::Command::new("ptah")
+        .version(crate::VERSION)
+        // Mirrors what clap_derive generates for the required subcommand
+        // field of `Cli`.
+        .subcommand_required(true)
+        .arg_required_else_help(true);
+    if let Some(about) = full.get_about().cloned() {
+        visible = visible.about(about);
+    }
+    for sub in full.get_subcommands_mut() {
+        if !sub.is_hide_set() {
+            visible = visible.subcommand(sub.clone());
+        }
+    }
+    visible
+}
+
+/// `.ptah/config.toml` scaffold written by `ptah init`: a fully
+/// commented registry skeleton. Parses as a valid empty registry
+/// exactly as written (pinned by test), so a fresh scaffold is a
+/// working (agentless) registry from the first run.
+const CONFIG_SKELETON: &str = r#"# ptah agent registry (project layer).
+#
+# Discovery: ptah looks for .ptah/config.toml in the directory it runs
+# in and every parent directory, and also reads the user layer
+# ($XDG_CONFIG_HOME/ptah/config.toml or ~/.config/ptah/config.toml).
+# When both layers define the same agent name the project entry wins,
+# wholesale; agents defined in only one layer pass through.
+#
+# Fields per agent:
+#   command  required — the executable to spawn
+#   args     optional — argv after the command (default: none)
+#   env      optional — extra environment for the child; `${VAR}`
+#            interpolates from ptah's environment at resolve time
+#            (unset becomes empty) and values merge over the inherited
+#            environment.
+#
+# Example — uncomment and edit:
+#
+# [agents.claude]
+# command = "npx"
+# args = ["-y", "@agentclientprotocol/claude-agent-acp@latest"]
+#
+# [agents.claude.env]
+# ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}"
+"#;
+
+/// Next-step hints printed by `ptah init` on every run — including
+/// runs where both files were skipped.
+const INIT_HINTS: &str = r#"Next steps:
+
+  1. Edit .ptah/config.toml — add an agent under [agents.<name>]; the
+     comments there document every field and the two-layer discovery.
+  2. Point your editor's luau-lsp at .ptah/ptah.d.luau (platform
+     "standard") for script completion and type checking — see the
+     README "Editor setup" section. After upgrading ptah, refresh the
+     definitions with: ptah types > .ptah/ptah.d.luau
+  3. Install CLI completions for your shell — ptah completions <shell>;
+     per-shell install lines are in the README "Shell completions"
+     section.
+  4. Scripting ptah from a coding agent? The ptah skill documents the
+     whole API: skills/ptah/SKILL.md in the ptah repo.
+"#;
+
+/// `ptah init`: scaffold `./.ptah/` in the current working directory
+/// with exactly two files — `ptah.d.luau` (byte-identical to
+/// `ptah types` stdout) and `config.toml` (commented registry
+/// skeleton). Each file is written only when absent; existing files
+/// are skipped with a message, never clobbered, so re-running is
+/// idempotent and a partial scaffold completes. Hints print on every
+/// run. Requires no script, registry, or agent configuration; a
+/// failure to create the directory or write a file reports on stderr
+/// and exits 1.
+fn run_init() -> ExitCode {
+    if let Err(e) = std::fs::create_dir_all("./.ptah") {
+        eprintln!("error: cannot create ./.ptah: {e}");
+        return ExitCode::from(1);
+    }
+    for (name, contents) in [
+        ("config.toml", CONFIG_SKELETON),
+        ("ptah.d.luau", definitions_bytes().as_str()),
+    ] {
+        let path = format!(".ptah/{name}");
+        if std::path::Path::new(&path).exists() {
+            println!("skipped (exists): {path}");
+            continue;
+        }
+        if let Err(e) = std::fs::write(&path, contents) {
+            eprintln!("error: cannot write {path}: {e}");
+            return ExitCode::from(1);
+        }
+        println!("created: {path}");
+    }
+    print!("{INIT_HINTS}");
     ExitCode::SUCCESS
 }
 
@@ -144,6 +294,8 @@ pub fn main() -> ExitCode {
             verbose,
         }) => (script, render, verbose),
         Ok(Parsed::Types) => return print_types(),
+        Ok(Parsed::Completions(shell)) => return print_completions(shell),
+        Ok(Parsed::Init) => return run_init(),
         Ok(Parsed::Check { script, no_color }) => return run_check(script, no_color),
         Ok(Parsed::Bridge) => return crate::bridge::run(),
         Err(e) => {
@@ -353,8 +505,91 @@ mod tests {
     fn types_subcommand_parses_without_run_arguments() {
         match parse(&args(&["types"])).unwrap() {
             Parsed::Types => {}
-            Parsed::Run { .. } | Parsed::Check { .. } | Parsed::Bridge => panic!("expected Types"),
+            Parsed::Run { .. }
+            | Parsed::Check { .. }
+            | Parsed::Completions(_)
+            | Parsed::Init
+            | Parsed::Bridge => panic!("expected Types"),
         }
+    }
+
+    #[test]
+    fn completions_subcommand_parses_every_shell() {
+        for (name, shell) in [
+            ("bash", Shell::Bash),
+            ("zsh", Shell::Zsh),
+            ("fish", Shell::Fish),
+            ("elvish", Shell::Elvish),
+            ("powershell", Shell::PowerShell),
+        ] {
+            match parse(&args(&["completions", name])).unwrap() {
+                Parsed::Completions(s) => assert_eq!(s, shell, "mismatch for {name}"),
+                _ => panic!("expected Completions for {name}"),
+            }
+        }
+    }
+
+    #[test]
+    fn completions_unknown_shell_is_a_usage_error() {
+        let err = parse(&args(&["completions", "tcsh"])).unwrap_err();
+        assert!(!matches!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayVersion | clap::error::ErrorKind::DisplayHelp
+        ));
+    }
+
+    #[test]
+    fn completions_missing_shell_is_a_usage_error() {
+        let err = parse(&args(&["completions"])).unwrap_err();
+        assert!(!matches!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayVersion | clap::error::ErrorKind::DisplayHelp
+        ));
+    }
+
+    #[test]
+    fn completion_tree_carries_visible_subcommands_and_hides_bridge() {
+        let cmd = completion_command();
+        let names: Vec<String> = cmd
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect();
+        for visible in ["run", "check", "types", "completions", "init"] {
+            assert!(names.iter().any(|n| n == visible), "{visible} missing");
+        }
+        assert!(!names.iter().any(|n| n == "__bridge"), "{names:?}");
+    }
+
+    #[test]
+    fn init_subcommand_parses() {
+        match parse(&args(&["init"])).unwrap() {
+            Parsed::Init => {}
+            _ => panic!("expected Init"),
+        }
+    }
+
+    #[test]
+    fn init_skeleton_parses_as_an_empty_registry() {
+        let registry = crate::config_fs::from_parts(None, Some(CONFIG_SKELETON)).unwrap();
+        assert!(
+            registry.agent_names().is_empty(),
+            "skeleton must parse with no agents: {:?}",
+            registry.agent_names()
+        );
+    }
+
+    #[test]
+    fn definitions_bytes_are_header_plus_embedded_file() {
+        let bytes = definitions_bytes();
+        let (header, body) = bytes
+            .split_once('\n')
+            .unwrap_or_else(|| panic!("no header line: {bytes:?}"));
+        assert_eq!(header, format!("-- ptah {} type definitions", crate::VERSION));
+        assert_eq!(
+            body,
+            crate::check::defs::TYPE_DEFINITIONS,
+            "definitions body must be the embedded file byte-for-byte"
+        );
     }
 
     #[test]
