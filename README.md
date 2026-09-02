@@ -85,7 +85,13 @@ plain redirect into your shell's completion directory. Scripts are
 generated from the installed binary's own command tree, so they always
 match your `ptah` version (re-run the install line after upgrading);
 hidden internals never appear. An unknown or missing `<shell>` is a
-usage error (exit 2).
+usage error (exit 2). The nix flake package installs the `zsh`, `bash`,
+and `fish` scripts into its output's standard completion directories
+(`share/zsh/site-functions`, `share/bash-completion/completions`,
+`share/fish/vendor_completions.d`), generated at build time from the
+binary being packaged — so profile-based installs (NixOS, home-manager,
+`nix profile`) get working completions automatically and the redirect
+lines below are only needed for other installation paths (cargo, etc.).
 
 ```sh
 # bash (bash-completion picks up files in this directory)
