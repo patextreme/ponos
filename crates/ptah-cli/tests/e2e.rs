@@ -628,6 +628,10 @@ fn exec_timeout_kills_process_group() {
     // per-pid kill would leave one alive. The sleeps' own argv (`9871`,
     // `9872`) is what the /proc scan finds; both must be dead after the
     // raise.
+    // A previously killed run may have orphaned these tags; sweep so
+    // the final no-orphan assertions are about *this* run.
+    common::clear_stale_tag("9871");
+    common::clear_stale_tag("9872");
     let dir = tmpdir("exec-timeout");
     let script = write_script(
         &dir,
@@ -718,6 +722,9 @@ fn in_flight_exec_killed_on_script_error() {
     // shell-exec spec "Script error kills running child": a spawned task
     // parks in a long exec; the main body errors and ends the run —
     // teardown kills the exec's process group before returning.
+    // A previously killed run may have orphaned this tag; sweep so
+    // the final no-orphan assertion is about *this* run.
+    common::clear_stale_tag("9873");
     let dir = tmpdir("exec-teardown-error");
     let script = write_script(
         &dir,
@@ -736,6 +743,9 @@ error("script exploded", 0)
 #[test]
 fn in_flight_exec_killed_on_ptah_exit() {
     // shell-exec spec "ptah.exit kills running child".
+    // A previously killed run may have orphaned this tag; sweep so
+    // the final no-orphan assertion is about *this* run.
+    common::clear_stale_tag("9874");
     let dir = tmpdir("exec-teardown-exit");
     let script = write_script(
         &dir,

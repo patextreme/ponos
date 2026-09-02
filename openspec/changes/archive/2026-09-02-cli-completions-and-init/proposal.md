@@ -58,3 +58,8 @@ the registry discovery/layering model are untouched.
   skeleton parses as an empty registry, defs byte-identical to `ptah types`,
   idempotent re-run, existing-file skip). `Cargo.lock` refresh in the dev
   shell; `nix flake check` picks it up through crane.
+- Folded in during verification: `clear_stale_tag` pre-sweep helper
+  (`tests/common/mod.rs`) for the e2e stable-tag exec witnesses
+  (`9871`–`9874`), so an orphan left by a previously SIGKILLed run can't
+  poison the no-orphan assertions — surfaced as a phantom failure while
+  re-running the final verification.

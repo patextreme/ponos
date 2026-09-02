@@ -40,10 +40,16 @@ and `Parsed::Init` join `Types`/`Check` in the pre-runtime match arm: no tokio
 runtime, no tracing subscriber, no registry discovery. Both commands must work
 on a machine with no agents configured.
 
-**D3 — hidden `__bridge` stays hidden.** clap_complete omits `hide`-flagged
-subcommands from generated scripts; the e2e test asserts both directions
-(`run`/`check`/`types`/`completions`/`init` present, `__bridge` absent) so a
-future clap_complete regression cannot silently leak the internal command.
+**D3 — hidden `__bridge` stays hidden.** Verified during implementation:
+clap_complete 4.x does *not* omit `hide`-flagged subcommands (checked
+against 4.6) — generating from the raw `Cli` tree would leak `__bridge`
+into every emitted script. Generation therefore runs over a copy of the
+live command tree with hidden subcommands stripped (`completion_command()`);
+everything else (args, help text, new visible subcommands) still derives
+from the live struct, so emitted scripts cannot drift from the binary.
+The e2e test asserts both directions (`run`/`check`/`types`/`completions`/`init`
+present, `__bridge` absent) so neither a clap_complete regression nor a
+stripping regression can silently leak the internal command.
 
 **D4 — init writes exactly two files, copy lives in `ptah-cli`.** The skeleton
 and next-step hints are `const` strings in the CLI crate (`config.toml`
