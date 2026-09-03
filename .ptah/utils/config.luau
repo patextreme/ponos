@@ -9,5 +9,5 @@ export type Config = {
 return {
 	defaultModel = "zai/glm-5.3",
 	judgeModel = "zai/glm-5.3-flash",
-	changeName = "harden-signal-teardown",
+	changeName = "cli-completions-and-init",
 } :: Config

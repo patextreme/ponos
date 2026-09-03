@@ -9,6 +9,10 @@ members = ["crates/*"]
 [workspace.dependencies]
 agent-client-protocol = { version = "1.3", features = ["unstable_end_turn_token_usage"] }
 clap = { version = "4.6", features = ["derive"] }
+# Completion-script generation for `ptah completions`, from the live clap
+# tree so emitted scripts always match the installed binary. Pinned to
+# the same 4.x line as clap.
+clap_complete = "4"
 libc = "0.2"
 mlua = { version = "0.12", features = ["luau", "async", "serialize"] }
 # Pure-Rust Luau parser (AST walk for `ptah check`'s static lints and the

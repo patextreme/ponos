@@ -51,6 +51,8 @@ cargo test             # full suite; integration tests use the mock agent only
 ptah run <script.luau> [--quiet] [--verbose] [-vv] [--no-color]
 ptah check <script.luau> [--no-color]
 ptah types
+ptah completions <shell>
+ptah init
 ptah --version
 ```
 
@@ -60,6 +62,13 @@ ptah --version
 - `--no-color` — drop ANSI colors, keep `[agent/session]` text prefixes
 - `ptah types` — print the Luau type definitions for the script API
   (see [Editor setup](#editor-setup)); needs no registry, script, or agents
+- `ptah completions <shell>` — print a shell completion script for
+  `bash`, `zsh`, `fish`, `elvish`, or `powershell` (see
+  [Shell completions](#shell-completions)); unknown shells are usage
+  errors
+- `ptah init` — scaffold `./.ptah/` with the type definitions and a
+  commented registry skeleton (see [Editor setup](#editor-setup));
+  skips files that already exist
 
 Exit codes: `0` on success, `1` on an uncaught script error or a never-observed
 task error (printed to stderr), `2` on CLI/usage errors, `n` when the script
@@ -67,6 +76,42 @@ calls `ptah.exit(n)`, and `130`/`143` when the run is cancelled by SIGINT/
 SIGTERM (teardown — including killing in-flight exec children — runs before
 the exit). For `ptah check`, `1` means findings and `2` also covers
 "check could not run" (see [Checking scripts](#checking-scripts)).
+
+## Shell completions
+
+`ptah completions <shell>` prints a completion script for `bash`, `zsh`,
+`fish`, `elvish`, or `powershell` to stdout — nothing else — so it's a
+plain redirect into your shell's completion directory. Scripts are
+generated from the installed binary's own command tree, so they always
+match your `ptah` version (re-run the install line after upgrading);
+hidden internals never appear. An unknown or missing `<shell>` is a
+usage error (exit 2). The nix flake package installs the `zsh`, `bash`,
+and `fish` scripts into its output's standard completion directories
+(`share/zsh/site-functions`, `share/bash-completion/completions`,
+`share/fish/vendor_completions.d`), generated at build time from the
+binary being packaged — so profile-based installs (NixOS, home-manager,
+`nix profile`) get working completions automatically and the redirect
+lines below are only needed for other installation paths (cargo, etc.).
+
+```sh
+# bash (bash-completion picks up files in this directory)
+ptah completions bash > ~/.local/share/bash-completion/completions/ptah
+
+# zsh (~/.zfunc must be on fpath before compinit)
+ptah completions zsh > ~/.zfunc/_ptah
+
+# fish
+ptah completions fish > ~/.config/fish/completions/ptah.fish
+
+# powershell (appends the registration to your profile)
+ptah completions powershell >> $PROFILE
+
+# elvish (appends the registration to your rc)
+ptah completions elvish >> ~/.config/elvish/rc.elv
+```
+
+Completion is static: subcommands and flags complete; agent names live
+inside scripts, not argv, so nothing dynamic is lost.
 
 ## Output format
 
@@ -506,17 +551,28 @@ require.
 
 ## Editor setup
 
-Scripts get completion, hover, and type checking — plus sandbox violations
-flagged before a run — by pointing [luau-lsp](https://github.com/luau-lsp/luau-lsp)
-at ptah's type definitions:
+`ptah init` is the front door: it scaffolds `./.ptah/` in the current
+directory with exactly two files —
+
+- `.ptah/ptah.d.luau` — the Luau type definitions for the script API,
+  byte-identical to `ptah types` output (version header included), so
+  they always match the installed binary;
+- `.ptah/config.toml` — a fully commented agent-registry skeleton
+  (see the comments there for the two-layer discovery and `${VAR}`
+  interpolation rules).
+
+Existing files are skipped, never overwritten — re-running `ptah init`
+is safe. After upgrading ptah, refresh the definitions without
+re-running init:
 
 ```sh
-ptah types > ptah.d.luau
+ptah types > .ptah/ptah.d.luau
 ```
 
-`ptah types` emits definitions version-matched to the installed binary: a
-`-- ptah <version> type definitions` header followed by the file
-byte-for-byte. Start scripts with `--!strict` for full checking (the
+Scripts get completion, hover, and type checking — plus sandbox
+violations flagged before a run — by pointing
+[luau-lsp](https://github.com/luau-lsp/luau-lsp) at `.ptah/ptah.d.luau`.
+Start scripts with `--!strict` for full checking (the
 [bundled examples](examples/) do). The definitions also model the sandbox —
 `os` trimmed to `time`/`clock`, `coroutine` to `yield`, and
 `loadstring`/`collectgarbage` unavailable — so editor-approved code cannot
@@ -532,7 +588,7 @@ Roblox):
 ```jsonc
 {
   "luau-lsp.platform.type": "standard",
-  "luau-lsp.types.definitionFiles": ["ptah.d.luau"]
+  "luau-lsp.types.definitionFiles": [".ptah/ptah.d.luau"]
 }
 ```
 
@@ -543,7 +599,7 @@ require("lspconfig").luau_lsp.setup({
   settings = {
     ["luau-lsp"] = {
       platform = { type = "standard" },
-      types = { definitionFiles = { "ptah.d.luau" } },
+      types = { definitionFiles = { ".ptah/ptah.d.luau" } },
     },
   },
 })

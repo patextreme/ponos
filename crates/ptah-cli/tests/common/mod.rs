@@ -98,6 +98,17 @@ pub fn wait_for_processes(needle: &str, want: usize, what: &str) {
     );
 }
 
+/// Sweep stale processes a previously killed run left under a stable
+/// tag, then wait for the sweep to land — the pre-run half of the
+/// suite's no-orphan witnessing. Call this at the start of any test
+/// asserting a stable tag (the e2e exec tags, the cli signal tags), so
+/// the witness is about *its own* processes, never a leftover: a
+/// SIGKILLed run skips drop-time kills and orphans its tagged sleeps.
+pub fn clear_stale_tag(tag: &str) {
+    kill_processes(tag);
+    wait_for_processes(tag, 0, "stale tag cleared before the run");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
