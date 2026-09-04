@@ -1,14 +1,17 @@
 --!strict
 -- PR review loop component: run a review→fix→push convergence against a
--- pull request, generalized from identus-ws's pr-review-loop — all repo
--- specifics (reviewer instruction text, dry-run gating) arrive as config,
--- and the PR URL is the sole repository context. The loop is this component's own policy
+-- pull request, generalized from identus-ws's pr-review-loop — repo
+-- specifics (reviewer instruction document, dry-run gating) arrive as
+-- config, with the built-in default instruction standing in when no
+-- document is configured, and the PR URL is the sole repository
+-- context. The loop is this component's own policy
 -- over std.predicate (following the shared conventions in ../README.md):
 -- escalation probes blocking findings with a subagent before asking,
 -- each fix is followed by a commit-and-push prompt, and the converged
 -- session posts the verdict comment.
 
 local predicate = require("../../std/predicate")
+local defaultInstruction = require("./default-instruction")
 
 export type Config = {
 	-- Work agent handle reviewing and fixing the PR.
@@ -18,9 +21,15 @@ export type Config = {
 	-- Optional per-session model config ids for work and judge sessions.
 	model: string?,
 	judgeModel: string?,
-	-- Repository-relative path of the reviewer instruction document the
-	-- agent must follow.
-	reviewInstructionFile: string,
+	-- Optional repository-relative path of a reviewer instruction
+	-- document. A configured document must define what counts as a
+	-- blocking issue for this repository and instruct the reviewer to
+	-- classify findings as blocking or non-blocking — the instruction
+	-- contract (see the README): the judge predicates and fix prompts
+	-- below speak that fixed vocabulary. When omitted, reviews run
+	-- against the built-in default instruction; a configured document
+	-- wins.
+	reviewInstructionFile: string?,
 	-- When true the commit/push step is skipped: the loop converges on
 	-- reviews and fixes but never pushes to the PR branch.
 	dryRun: boolean?,
@@ -60,10 +69,18 @@ function M.new(config: Config): Instance
 					session:setConfig("model", config.model)
 				end
 
-				local outcome = session:prompt(
-					header
-						.. `Use the review instruction at {config.reviewInstructionFile} to review PR {prUrl}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`
-				)
+				-- The instruction branch: a configured document wins over the
+				-- built-in default. The classification ask stays in both
+				-- branches — enforcement for instruction documents that
+				-- under-specify the output format (redundant with a compliant
+				-- document by design).
+				local reviewAsk: string
+				if config.reviewInstructionFile ~= nil then
+					reviewAsk = `Use the review instruction at {config.reviewInstructionFile} to review PR {prUrl}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`
+				else
+					reviewAsk = `Use the following review instruction:\n\n{defaultInstruction}\n\n---\n\nUsing this instruction, review PR {prUrl}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`
+				end
+				local outcome = session:prompt(header .. reviewAsk)
 				if predicate("The review verdict does not contain blocking issues", outcome.text, {
 					agent = config.judgeAgent,
 					model = config.judgeModel,

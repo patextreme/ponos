@@ -16,8 +16,8 @@ a real third consumer ("extract shared mechanics, never the policy").
 
 New constraint: most consumers will never author an instruction document,
 so the component needs a built-in default good enough to be their actual
-reviewer — and this repository dogfoods that default (single source: the
-repo's own workflow omits `reviewInstructionFile` and its instruction
+reviewer — and this repository dogfoods that default (single source:
+the repo's own workflows omit `reviewInstructionFile` and its instruction
 markdown file is deleted).
 
 ## Goals / Non-Goals
@@ -111,7 +111,7 @@ markdown file is deleted).
   as versioned behavior (Decision 6); the README documents file-per-doc as
   the pin.
 - [Dogfood switch leaves file mode unexercised in this repo's own
-  workflow] → the offline file-mode precedence scenario (test-authored
+  workflows] → the offline file-mode precedence scenario (test-authored
   instruction document) keeps the configured-document path covered.
 - [A real second vocabulary arrives soon] → add the minimal phrasing
   overrides then, defaults preserving today's strings; the declared

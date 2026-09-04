@@ -538,10 +538,16 @@ ops:groom("demo-change")
 
 #[test]
 fn pr_review_loop_converges_review_fix_push() {
-    // Judge rules: the second review pass passes (the fix landed), the
-    // escalation predicate never needs a human, everything else fails —
-    // so the loop runs review → fix → push and converges. The push
-    // prompt must reach the agent (the mock echoes prompts back).
+    // Default mode (no `reviewInstructionFile` — this repo's own
+    // dogfood configuration): the loop runs against the built-in
+    // default instruction. Judge rules: the second review pass passes
+    // (the fix landed), the escalation predicate never needs a human,
+    // everything else fails — so the loop runs review → fix → push and
+    // converges. The push prompt must reach the agent (the mock echoes
+    // prompts back), and the echoed review prompt must carry the
+    // default's classification directive (uppercase BLOCKING — the
+    // component's own ask is lowercase, so only the inlined default
+    // text can match).
     let p = Project::new(
         "pr-review-loop",
         &[("MOCK_SUBMIT_MATCH", &converges_on_second_pass())],
@@ -553,7 +559,6 @@ local prReview = require("./vendor/factory-components/components/pr-review-loop/
 local loop = prReview.new({
 	agent = ptah.agent("demo"),
 	judgeAgent = ptah.agent("judge"),
-	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 })
 local text = loop:review("https://github.com/example/example/pull/6")
 print("review-ok:" .. tostring(text ~= nil))
@@ -567,8 +572,8 @@ print("review-ok:" .. tostring(text ~= nil))
         "the fix must be followed by the push prompt, stdout: {stdout}"
     );
     assert!(
-        stdout.contains("review-instruction.md"),
-        "the configured instruction path must reach the agent, stdout: {stdout}"
+        stdout.contains("BLOCKING"),
+        "the built-in default instruction (classification directive) must reach the agent, stdout: {stdout}"
     );
 }
 
@@ -590,7 +595,6 @@ local prReview = require("./vendor/factory-components/components/pr-review-loop/
 local loop = prReview.new({
 	agent = ptah.agent("demo"),
 	judgeAgent = ptah.agent("judge"),
-	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 	dryRun = true,
 })
 local text = loop:review("https://github.com/example/example/pull/6")
@@ -607,6 +611,48 @@ print("review-ok:" .. tostring(text ~= nil))
     assert!(
         stdout.contains("Please comment on the PR with the review feedback along with the verdict"),
         "the converged session still posts the verdict comment in dry-run, stdout: {stdout}"
+    );
+}
+
+#[test]
+fn pr_review_loop_configured_instruction_wins_over_default() {
+    // File-mode precedence: a test-authored instruction document is
+    // configured via `reviewInstructionFile`; its path must reach the
+    // agent (file mode references the document, it does not inline
+    // it), while the built-in default's classification directive
+    // (uppercase BLOCKING) must not — a configured document wins over
+    // the default.
+    let p = Project::new(
+        "pr-review-file-wins",
+        &[("MOCK_SUBMIT_MATCH", &converges_on_second_pass())],
+    );
+    p.write(
+        ".ptah/instructions/reviewer.md",
+        "# Reviewer instruction\n\nThis repository's own classification policy.\n",
+    );
+    let script = p.write(
+        "main.luau",
+        r#"--!strict
+local prReview = require("./vendor/factory-components/components/pr-review-loop/component")
+local loop = prReview.new({
+	agent = ptah.agent("demo"),
+	judgeAgent = ptah.agent("judge"),
+	reviewInstructionFile = ".ptah/instructions/reviewer.md",
+})
+local text = loop:review("https://github.com/example/example/pull/6")
+print("review-ok:" .. tostring(text ~= nil))
+"#,
+    );
+    let (code, stdout, stderr) = p.run(&script, &["--no-color"]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("review-ok:true"), "stdout: {stdout}");
+    assert!(
+        stdout.contains(".ptah/instructions/reviewer.md"),
+        "the configured instruction path must reach the agent, stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("BLOCKING"),
+        "the built-in default must not be inlined when a document is configured, stdout: {stdout}"
     );
 }
 
@@ -629,8 +675,13 @@ fn dogfood_openspec_shim_runs() {
     // 7a63d32): the groom/implement/verify operations themselves are
     // covered component-level above; this pins that the repo's actual
     // shim runs against the mock — including the archive step of its
-    // verify call.
-    let p = Project::new_env("dogfood-openspec", "pi", &[("MOCK_SUBMIT_MATCH", &always(true))]);
+    // verify call and the typed PR-url handoff into the review loop:
+    // the mock submits a schema-valid prUrl object for the PR-url
+    // prompt (first matching rule) and true everywhere else, so every
+    // judge predicate converges.
+    let rules = r#"[{"match":"PR url","value":{"prUrl":"https://github.com/patextreme/ptah/pull/10"}},{"match":"","value":true}]"#
+        .to_string();
+    let p = Project::new_env("dogfood-openspec", "pi", &[("MOCK_SUBMIT_MATCH", &rules)]);
     let (code, stdout, stderr) = p.run(&workflow("openspec.luau"), &["--no-color"]);
     assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(

@@ -39,8 +39,9 @@ the component reviews out of the box.
   built-in default; when omitted, reviews run against the default. The
   loop's review prompt keeps its classification ask in both modes
   (enforcement for instructions that under-specify the output format).
-- This repository **dogfoods the default**: the workflow shim omits
-  `reviewInstructionFile` — the same component and the same built-in
+- This repository **dogfoods the default**: both workflow shims
+  (`.ptah/workflows/pr-review-loop.luau` and `.ptah/workflows/openspec.luau`)
+  omit `reviewInstructionFile` — the same component and the same built-in
   instruction every consumer gets — and
   `.ptah/instructions/review-instruction.md` is deleted (single source).
 - Tests: the existing runtime scenarios move to default mode (mirroring the
@@ -55,8 +56,9 @@ the component reviews out of the box.
 
 ### Modified Capabilities
 
-- `factory-components`: the PR review loop component requirement gains the
-  instruction-contract and built-in-default scenarios — the declared
+- `factory-components`: the capability's spec gains a new `PR review
+  instruction contract` requirement carrying the instruction-contract and
+  built-in-default scenarios — the declared
   classification vocabulary, the default's use when no document is
   configured, and precedence of a configured document (docs-as-behavior,
   mirroring the existing environment-requirements scenario).
@@ -68,7 +70,8 @@ the component reviews out of the box.
   `default-instruction.luau`, `README.md` (contract + default docs);
   `factory-components/components/README.md` (layout note for the data-only
   sibling module).
-- `.ptah/workflows/pr-review-loop.luau` (drop the field);
+- `.ptah/workflows/pr-review-loop.luau` and `.ptah/workflows/openspec.luau`
+  (drop the field from both shims);
   delete `.ptah/instructions/review-instruction.md`.
 - `crates/ptah-cli/tests/factory_components.rs`: rewrite the two runtime
   scenarios to default mode, add the file-mode precedence scenario; type-gate

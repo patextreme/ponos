@@ -12,7 +12,6 @@ local loop = prReview.new({
 	judgeAgent = agent,
 	model = "zai/glm-5.3",
 	judgeModel = "zai/glm-5.3-flash",
-	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 	dryRun = false,
 	maxIterations = 15,
 })
