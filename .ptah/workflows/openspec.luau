@@ -15,6 +15,13 @@ local opsx = openspec.new({
 	judgeModel = "zai/glm-5.3-flash",
 })
 
-opsx:groom("drop-converge-loop")
-opsx:implement("drop-converge-loop")
-opsx:verify("drop-converge-loop")
+local changeName = "component-agent-handles"
+
+opsx:groom(changeName)
+opsx:implement(changeName)
+opsx:verify(changeName)
+
+local agent = ptah.agent("pi")
+local session = agent:session({ id = "committer" })
+session:prompt("Commit the uncommitted changes and push to remote")
+
