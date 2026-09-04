@@ -158,6 +158,50 @@ any agent subprocess spawns.)
   stderr). Always `await()`/`join()` your tasks, or handle their outcome
   entries.
 
+## Factory Components (the shared workflow library)
+
+Before hand-rolling a review loop, a typed judge, a `gh` transport, or
+a repo fan-out daemon, check the bundled library under
+`factory-components/` (in the ptah repo; consumer repos mount it as
+source — nix flake input + symlink, submodule, or vendored copy):
+
+- `std/predicate` — typed boolean judge (bounded retry; no verdict is a
+  script error, never a hang)
+- `std/gh` — GitHub CLI transport over `ptah.exec` (structured
+  outcomes, never raises for a failed command, POSIX-safe quoting)
+- `std/converge` — the convergence loop: prompt → judge → fix with
+  human escalation and an iteration cap
+- `std/daemon` — per-repo loop with error isolation (sequential or
+  bounded parallel)
+- `components/openspec` — groom/implement/verify an openspec change
+- `components/pr-review-loop` — review→fix→push convergence on a PR
+
+Consumption is a **shim** — the only workflow code the consumer repo
+owns:
+
+```lua
+--!strict
+local openspec = require("./vendor/factory-components/components/openspec/component")
+
+local ops = openspec.new({
+	agent = "claude",       -- work agent (registry name)
+	judgeAgent = "claude",  -- judge agent
+	model = "claude-opus-4-5",
+	judgeModel = "claude-haiku-4-5",
+})
+
+ops:groom("add-auth")
+```
+
+Rules of the contract: mount the tree anywhere (requires are relative
+and the library never requires out of its tree, so the mount point is
+free — a read-only store path works); config is data-only (functions
+are not configuration) and per-call data (change name, PR URL) is a
+method argument; `ptah check` on the shim is the compatibility gate —
+component `Config` types are strict, so a mistyped field is a type
+error naming the field. See the ptah repo's `factory-components/`
+README and each component's README for environment requirements.
+
 ## Patterns
 
 Sequential turns (state accumulates across prompts in one session):

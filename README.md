@@ -640,6 +640,57 @@ EOF
 ptah run examples/sequential_review.luau
 ```
 
+## Factory Components
+
+[`factory-components/`](factory-components/) is the shared workflow
+library: repo-agnostic stdlib helpers (`std/`) — the typed boolean
+judge (`predicate`), the GitHub CLI transport (`gh`), the convergence
+loop (`converge`), and the repo-loop skeleton (`daemon`) — plus
+composable workflow components (`components/`) such as the openspec
+lifecycle and a PR review loop. This repo's own
+`.ptah/workflows/*.luau` are shims over it (dogfooding is what keeps
+the copies from drifting).
+
+The library is consumed as **source**: mount the tree wherever you
+like (nix flake input + symlink, git submodule, vendored copy) and
+write a shim — the only workflow code your repo owns:
+
+```lua
+--!strict
+local openspec = require("./vendor/factory-components/components/openspec/component")
+
+local ops = openspec.new({
+	agent = "claude",       -- work agent (registry name)
+	judgeAgent = "claude",  -- judge agent (a small/fast model is ideal)
+	model = "claude-opus-4-5",
+	judgeModel = "claude-haiku-4-5",
+})
+
+ops:groom("add-auth")
+```
+
+The contract that makes the mount work anywhere:
+
+- **Mount-point freedom** — `require` is relative to the requiring
+  file and may traverse outside the shim's directory, and library
+  modules only require within their own tree, so the mount location is
+  your free choice (a read-only nix store path included).
+- **Data-only config** — every component field is data (strings,
+  numbers, booleans); functions are not configuration. Per-call data
+  (a change name, a PR URL) is a method argument.
+- **`ptah check` is the compatibility gate** — every module is
+  `--!strict` and every component exports its `Config` type, so your
+  shim's config is type-checked against the component's type when you
+  run `ptah check` — a mistyped field is a finding naming the field.
+  When you bump the mounted source, the check is what catches the
+  break.
+
+See [`factory-components/README.md`](factory-components/README.md) for
+the full contract and each component's README for its declared
+environment requirements; the distribution decision (source mount, no
+registry, no lockfile) is recorded in
+[`docs/adr/0001-source-mounted-factory-components.md`](docs/adr/0001-source-mounted-factory-components.md).
+
 ## Development
 
 - `crates/ptah-cli/src/bin/mock-agent/` — a scriptable ACP agent (with an MCP client for
@@ -647,7 +698,8 @@ ptah run examples/sequential_review.luau
   `MOCK_HANG`, `MOCK_PERMISSION` (`once`/`always`/`reject`), `MOCK_TOOL`,
   `MOCK_TOOL_FLOW` (status-sequence replay), `MOCK_PLAN`, `MOCK_USAGE`,
   `MOCK_STDERR`, `MOCK_DELAY_MS`, `MOCK_SUBMIT`,
-  `MOCK_SUBMIT_BAD`, `MOCK_SUBMIT_ONCE`, `MOCK_NO_MCP`, `MOCK_ECHO_MCP`,
+  `MOCK_SUBMIT_BAD`, `MOCK_SUBMIT_ONCE`, `MOCK_SUBMIT_MATCH`
+  (prompt-content-keyed submissions), `MOCK_NO_MCP`, `MOCK_ECHO_MCP`,
   `MOCK_MCP_LIST`, `MOCK_CONFIG_OPTIONS`, `MOCK_CONFIG_REJECT`,
   `MOCK_CONFIG_UPDATE`, `MOCK_CONFIG_ECHO`, …).
 - `nix flake check` runs the entire suite in the sandbox.

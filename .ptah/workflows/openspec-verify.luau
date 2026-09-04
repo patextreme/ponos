@@ -1,48 +1,15 @@
 --!strict
+-- Shim: openspec verify loop (converge verification, then sync and
+-- archive) over the shared library (see factory-components/README.md
+-- for the consumption model). The only workflow code this repo owns.
 
-local cfg = require("./../utils/config")
-local predicateAgent = require("./../utils/predicate")
+local openspec = require("../../factory-components/components/openspec/component")
 
-local pi: Agent = ptah.agent("pi")
+local ops = openspec.new({
+	agent = "pi",
+	judgeAgent = "pi",
+	model = "zai/glm-5.3",
+	judgeModel = "zai/glm-5.3-flash",
+})
 
-local iteration = 0
-while true do
-	local reviewer: Session = pi:session({ id = `reviewer:{iteration}` })
-	reviewer:setConfig("model", cfg.defaultModel)
-
-	local reviewResult = reviewer:prompt(
-		`Verify the implementation of openspec change named {cfg.changeName} using the openspec-verify-change skill`
-	)
-	if
-		predicateAgent(
-			"The verification does not contain critical findings or warnings.",
-			reviewResult.text,
-			{ sessionId = `judge-review:{iteration}`, model = cfg.judgeModel }
-		)
-	then
-		ptah.log("The change is ready to be synced and archived")
-		break
-	end
-
-	local needHumanResult = reviewer:prompt(
-		`For the critical and warning severity findings, do you know how to resolve them, or do you need human input?`
-	)
-	if
-		predicateAgent(
-			"The verification result required human input to resolve",
-			needHumanResult.text,
-			{ sessionId = `judge-human:{iteration}`, model = cfg.judgeModel }
-		)
-	then
-		error("The change needs human input to resolve the issue")
-	end
-
-	local fixResult = reviewer:prompt("Go ahead and resolve the blockers")
-	ptah.log("Fix result: " .. fixResult.text)
-
-	iteration += 1
-end
-
-local archiver: Session = pi:session({ id = "archiver" })
-archiver:setConfig("model", cfg.defaultModel)
-archiver:prompt(`Please sync and archive the change {cfg.changeName}`)
+ops:verify("cli-completions-and-init")

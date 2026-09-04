@@ -30,14 +30,19 @@
       # Local runtime state and tooling configs — read from the
         # invocation dir at run time, never compile inputs — and nix/,
         # packaging only, so cargo builds stay insensitive to nix edits.
-        # One exception: .ptah/ also holds the checked-in type definitions,
-        # a genuine compile input (include_str! in src/cli.rs). Keeping
-        # the rest out means `nix run .` still does not rebuild when local
-        # .ptah scripts/config (or editor/agent scaffolding) change.
+        # Two exceptions inside .ptah/: the checked-in type definitions
+        # (a genuine compile input via include_str! in src/cli.rs) and
+        # the workflow shims (test-covered code —
+        # tests/factory_components.rs runs them against the mock agent,
+        # so they must survive in the sandbox source). Keeping the rest
+        # out means `nix run .` still does not rebuild when local .ptah
+        # scripts/config (or editor/agent scaffolding) change.
         if pkgs.lib.hasSuffix "/.ptah" path
         then type == "directory"
         else if pkgs.lib.hasSuffix "/.ptah/ptah.d.luau" path
         then true
+        else if pkgs.lib.hasInfix "/.ptah/workflows/" path
+        then pkgs.lib.hasSuffix ".luau" path
         else if pkgs.lib.hasInfix "/.ptah/" path
         then false
         else
