@@ -17,17 +17,16 @@ pr-review-loop.
   by `reviewInstructionFile` must exist and be readable by the agent.
 - **Judge agent** — any agent that can answer typed boolean prompts.
 
-## Config (data-only)
+## Config (data plus declared agent handles)
 
 ```lua
 local prReview = require("<mount>/factory-components/components/pr-review-loop/component")
 
 local loop = prReview.new({
-	agent = "claude",                    -- work agent (registry name)
-	judgeAgent = "claude",               -- judge agent (registry name)
+	agent = ptah.agent("claude"),        -- work agent handle
+	judgeAgent = ptah.agent("claude"),   -- judge agent handle
 	model = "opus",                      -- optional: work model id
 	judgeModel = "haiku",                -- optional: judge model id
-	repo = "owner/name",                 -- target repository
 	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 	dryRun = false,                      -- optional: never push (default false)
 	maxIterations = 15,                  -- optional: cap (default 15)
@@ -37,8 +36,8 @@ local loop = prReview.new({
 ## Operations
 
 - `loop:review(prUrl)` — run the loop against one pull request; the PR
-  URL is per-call data, not config. Returns the final accepted review
-  verdict text.
+  URL is per-call data and the sole repository context. Returns the
+  final accepted review verdict text.
 
 With `dryRun = true` the commit-and-push step is skipped entirely: the
 loop still reviews, judges, and fixes, but never pushes to the PR

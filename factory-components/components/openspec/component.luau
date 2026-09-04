@@ -9,11 +9,11 @@
 local predicate = require("../../std/predicate")
 
 export type Config = {
-	-- Work agent (name in the registry) driving the openspec skills.
-	agent: string,
-	-- Judge agent for the typed predicates (can be the same name with a
-	-- different model).
-	judgeAgent: string,
+	-- Work agent handle driving the openspec skills.
+	agent: Agent,
+	-- Judge agent handle for the typed predicates (can be the same
+	-- handle with a different model).
+	judgeAgent: Agent,
 	-- Optional per-session model config ids for work and judge sessions.
 	model: string?,
 	judgeModel: string?,
@@ -38,7 +38,7 @@ local M = {}
 function M.new(config: Config): Instance
 	local maxIterations =
 		if config.maxIterations ~= nil then config.maxIterations else DEFAULT_MAX_ITERATIONS
-	local work: Agent = ptah.agent(config.agent)
+	local work: Agent = config.agent
 
 	-- Prompt, judge the output, escalate or fix, repeat — bounded.
 	local function drive(sessionId: string, prompt: string, judge: string): string
@@ -112,7 +112,7 @@ function M.new(config: Config): Instance
 			)
 			-- The sync-and-archive step is part of the same operation: it
 			-- runs once the verification loop has converged.
-			local archiver: Session = ptah.agent(config.agent):session({ id = "openspec-archiver" })
+			local archiver: Session = work:session({ id = "openspec-archiver" })
 			if config.model ~= nil then
 				archiver:setConfig("model", config.model)
 			end

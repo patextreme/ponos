@@ -3,11 +3,12 @@
 -- a predicate holds for a payload, and read the verdict from the
 -- session's typed boolean result.
 --
--- Library contract (see ../README.md): data-only options, no writes,
--- no relative-cwd dependence, requires stay inside the tree.
+-- Library contract (see ../README.md): data plus declared ptah runtime
+-- handles, no writes, no relative-cwd dependence, requires stay inside
+-- the tree.
 
 export type PredicateOptions = {
-	agent: string,
+	agent: Agent,
 	sessionId: string,
 	model: string?,
 	maxAttempts: number?,
@@ -43,9 +44,8 @@ end
 -- are capped and exhaustion is a script error.
 local function predicate(predicateText: string, payload: string, options: PredicateOptions): boolean
 	local maxAttempts = if options.maxAttempts ~= nil then options.maxAttempts else DEFAULT_MAX_ATTEMPTS
-	local judge: Agent = ptah.agent(options.agent)
 	for attempt = 1, maxAttempts do
-		local session: Session = judge:session({
+		local session: Session = options.agent:session({
 			id = options.sessionId,
 			resultSchema = { type = "boolean" },
 		})

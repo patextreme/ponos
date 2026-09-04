@@ -182,8 +182,8 @@ owns:
 local openspec = require("./vendor/factory-components/components/openspec/component")
 
 local ops = openspec.new({
-	agent = "claude",       -- work agent (registry name)
-	judgeAgent = "claude",  -- judge agent
+	agent = ptah.agent("claude"),       -- work agent handle
+	judgeAgent = ptah.agent("claude"),  -- judge agent handle
 	model = "claude-opus-4-5",
 	judgeModel = "claude-haiku-4-5",
 })
@@ -193,9 +193,10 @@ ops:groom("add-auth")
 
 Rules of the contract: mount the tree anywhere (requires are relative
 and the library never requires out of its tree, so the mount point is
-free — a read-only store path works); config is data-only (functions
-are not configuration) and per-call data (change name, PR URL) is a
-method argument; `ptah check` on the shim is the compatibility gate —
+free — a read-only store path works); config is data plus declared
+ptah runtime handles where the component's config type declares them
+(`agent: Agent`; functions are not configuration) and per-call data
+(change name, PR URL) is a method argument; `ptah check` on the shim is the compatibility gate —
 component `Config` types are strict, so a mistyped field is a type
 error naming the field. See the ptah repo's `factory-components/`
 README and each component's README for environment requirements.

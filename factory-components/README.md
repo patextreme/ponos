@@ -52,8 +52,9 @@ loops share these conventions, documented here so drift stays visible:
 - A component is a facade of typed operations: `new(config)` returns an
   instance; instance methods are the operations; per-call data (a change
   name, a PR URL) is a method argument, not config.
-- Config is data-only — strings, numbers, booleans. Functions are not
-  configuration.
+- Config is data — strings, numbers, booleans — plus ptah runtime
+  handles where the component's config type declares them
+  (`agent: Agent`). Functions are not configuration.
 - Every module is `--!strict` and every component exports its `Config`
   type, so a consumer's `ptah check` validates their config against the
   component's config type (the compatibility gate).
@@ -72,8 +73,8 @@ vendored copy), then write a shim — the only workflow code you own:
 local openspec = require("./vendor/factory-components/components/openspec/component")
 
 local ops = openspec.new({
-	agent = "claude",
-	judgeAgent = "claude",
+	agent = ptah.agent("claude"),
+	judgeAgent = ptah.agent("claude"),
 	model = "claude-opus-4-5",
 	judgeModel = "claude-haiku-4-5",
 })

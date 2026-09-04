@@ -1,8 +1,8 @@
 --!strict
 -- PR review loop component: run a review→fix→push convergence against a
 -- pull request, generalized from identus-ws's pr-review-loop — all repo
--- specifics (reviewer instruction text, target repository, dry-run
--- gating) arrive as config. The loop is this component's own policy
+-- specifics (reviewer instruction text, dry-run gating) arrive as config,
+-- and the PR URL is the sole repository context. The loop is this component's own policy
 -- over std.predicate (following the shared conventions in ../README.md):
 -- escalation probes blocking findings with a subagent before asking,
 -- each fix is followed by a commit-and-push prompt, and the converged
@@ -11,15 +11,13 @@
 local predicate = require("../../std/predicate")
 
 export type Config = {
-	-- Work agent (name in the registry) reviewing and fixing the PR.
-	agent: string,
-	-- Judge agent for the typed predicates.
-	judgeAgent: string,
+	-- Work agent handle reviewing and fixing the PR.
+	agent: Agent,
+	-- Judge agent handle for the typed predicates.
+	judgeAgent: Agent,
 	-- Optional per-session model config ids for work and judge sessions.
 	model: string?,
 	judgeModel: string?,
-	-- Target repository the PR lives in (`owner/name`).
-	repo: string,
 	-- Repository-relative path of the reviewer instruction document the
 	-- agent must follow.
 	reviewInstructionFile: string,
@@ -44,7 +42,7 @@ function M.new(config: Config): Instance
 	local maxIterations =
 		if config.maxIterations ~= nil then config.maxIterations else DEFAULT_MAX_ITERATIONS
 	local dryRun = config.dryRun == true
-	local work: Agent = ptah.agent(config.agent)
+	local work: Agent = config.agent
 
 	local instance: Instance = {
 		review = function(_self: Instance, prUrl: string): string
@@ -64,7 +62,7 @@ function M.new(config: Config): Instance
 
 				local outcome = session:prompt(
 					header
-						.. `Use the review instruction at {config.reviewInstructionFile} to review PR {prUrl} in {config.repo}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`
+						.. `Use the review instruction at {config.reviewInstructionFile} to review PR {prUrl}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`
 				)
 				if predicate("The review verdict does not contain blocking issues", outcome.text, {
 					agent = config.judgeAgent,

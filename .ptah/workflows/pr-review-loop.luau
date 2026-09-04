@@ -6,11 +6,10 @@
 local prReview = require("../../factory-components/components/pr-review-loop/component")
 
 local loop = prReview.new({
-	agent = "pi",
-	judgeAgent = "pi",
+	agent = ptah.agent("pi"),
+	judgeAgent = ptah.agent("pi"),
 	model = "zai/glm-5.3",
 	judgeModel = "zai/glm-5.3-flash",
-	repo = "patextreme/ptah",
 	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 	dryRun = false,
 	maxIterations = 15,

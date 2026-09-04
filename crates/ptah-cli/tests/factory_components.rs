@@ -207,7 +207,7 @@ fn predicate_returns_the_submitted_verdict() {
          local verdict = predicate(\n\
          \t\"The payload mentions ptah\",\n\
          \t\"ptah drives agents\",\n\
-         \t{ agent = \"judge\", sessionId = \"judge-1\", model = \"flash\" }\n\
+         \t{ agent = ptah.agent(\"judge\"), sessionId = \"judge-1\", model = \"flash\" }\n\
          )\n\
          print(\"verdict=\" .. tostring(verdict))\n",
     );
@@ -227,7 +227,7 @@ fn predicate_no_verdict_is_a_bounded_script_error() {
         "main.luau",
         "--!strict\n\
          local predicate = require(\"./vendor/factory-components/std/predicate\")\n\
-         predicate(\"p\", \"payload\", { agent = \"judge\", sessionId = \"judge-x\", maxAttempts = 3 })\n",
+         predicate(\"p\", \"payload\", { agent = ptah.agent(\"judge\"), sessionId = \"judge-x\", maxAttempts = 3 })\n",
     );
     let (code, _stdout, stderr) = p.run(&script, &["--quiet"]);
     assert_eq!(code, 1, "stderr:\n{stderr}");
@@ -431,8 +431,8 @@ fn openspec_shim(p: &Project, op: &str) -> PathBuf {
             r#"--!strict
 local openspec = require("./vendor/factory-components/components/openspec/component")
 local ops = openspec.new({{
-	agent = "demo",
-	judgeAgent = "judge",
+	agent = ptah.agent("demo"),
+	judgeAgent = ptah.agent("judge"),
 	model = "work-model",
 	judgeModel = "judge-model",
 }})
@@ -517,8 +517,8 @@ fn openspec_component_iteration_cap_fails() {
         r#"--!strict
 local openspec = require("./vendor/factory-components/components/openspec/component")
 local ops = openspec.new({
-	agent = "demo",
-	judgeAgent = "judge",
+	agent = ptah.agent("demo"),
+	judgeAgent = ptah.agent("judge"),
 	maxIterations = 2,
 })
 ops:groom("demo-change")
@@ -551,9 +551,8 @@ fn pr_review_loop_converges_review_fix_push() {
         r#"--!strict
 local prReview = require("./vendor/factory-components/components/pr-review-loop/component")
 local loop = prReview.new({
-	agent = "demo",
-	judgeAgent = "judge",
-	repo = "example/example",
+	agent = ptah.agent("demo"),
+	judgeAgent = ptah.agent("judge"),
 	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 })
 local text = loop:review("https://github.com/example/example/pull/6")
@@ -657,7 +656,7 @@ fn component_runs_from_a_read_only_mount() {
         "shim.luau",
         r#"--!strict
 local openspec = require("./vendor/factory-components/components/openspec/component")
-local ops = openspec.new({ agent = "demo", judgeAgent = "judge" })
+local ops = openspec.new({ agent = ptah.agent("demo"), judgeAgent = ptah.agent("judge") })
 local text = ops:verify("some-change")
 print("readonly-mount-ok:" .. tostring(text ~= nil))
 "#,
@@ -694,13 +693,14 @@ fn mistyped_component_config_is_a_check_finding() {
     let lsp_dir = lsp.parent().expect("luau-lsp path has a parent").to_path_buf();
 
     // A typo'd key (missing the required `judgeAgent`): the diagnostic
-    // must name the field.
+    // must name the field. The valid field constructs its handle so the
+    // typo is the isolated error.
     let p = Project::new("gate-typo", &[]);
     let script = p.write(
         "main.luau",
         r#"--!strict
 local openspec = require("./vendor/factory-components/components/openspec/component")
-openspec.new({ agent = "demo", judgeAgnt = "demo" })
+openspec.new({ agent = ptah.agent("demo"), judgeAgnt = ptah.agent("demo") })
 "#,
     );
     let (code, _stdout, stderr) = p.check(&script, &lsp_dir);
@@ -717,7 +717,7 @@ openspec.new({ agent = "demo", judgeAgnt = "demo" })
         "main.luau",
         r#"--!strict
 local prReview = require("./vendor/factory-components/components/pr-review-loop/component")
-prReview.new({ agent = "demo", judgeAgent = "demo", repo = "a/b", reviewInstructionFile = "x.md", dryRun = "yes" })
+prReview.new({ agent = ptah.agent("demo"), judgeAgent = ptah.agent("judge"), reviewInstructionFile = "x.md", dryRun = "yes" })
 "#,
     );
     let (code, _stdout, stderr) = p.check(&script, &lsp_dir);
@@ -727,24 +727,48 @@ prReview.new({ agent = "demo", judgeAgent = "demo", repo = "a/b", reviewInstruct
         "the diagnostic must name the field and its accepted type, stderr:\n{stderr}"
     );
 
-    // The gate's accepting side: a well-typed shim for every component
-    // analyzes clean through the whole mounted require graph.
-    let p = Project::new("gate-clean", &[]);
+    // A callable hook in a config field: the contract admits data and
+    // declared runtime handles only, so an arbitrary function is a
+    // type error naming the field.
+    let p = Project::new("gate-hook", &[]);
     let script = p.write(
         "main.luau",
         r#"--!strict
 local openspec = require("./vendor/factory-components/components/openspec/component")
+openspec.new({ agent = ptah.agent("demo"), judgeAgent = ptah.agent("judge"), maxIterations = function() return 3 end })
+"#,
+    );
+    let (code, _stdout, stderr) = p.check(&script, &lsp_dir);
+    assert_eq!(code, 1, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("maxIterations"),
+        "the diagnostic must name the callable-hook field, stderr:\n{stderr}"
+    );
+
+    // The gate's accepting side: a well-typed shim for every component
+    // analyzes clean through the whole mounted require graph — handles
+    // from registry names and, for one role, from an inline agent spec
+    // (the registry-free consumer form).
+    let p = Project::new("gate-clean", &[]);
+    let script = p.write(
+        "main.luau",
+        format!(
+            r#"--!strict
+local openspec = require("./vendor/factory-components/components/openspec/component")
 local prReview = require("./vendor/factory-components/components/pr-review-loop/component")
-local ops = openspec.new({ agent = "demo", judgeAgent = "judge", maxIterations = 4 })
-local loop = prReview.new({
-	agent = "demo",
-	judgeAgent = "judge",
-	repo = "a/b",
+local inline = ptah.agent({{ command = "{mock}" }})
+local ops = openspec.new({{ agent = inline, judgeAgent = ptah.agent("judge"), maxIterations = 4 }})
+local loop = prReview.new({{
+	agent = ptah.agent("demo"),
+	judgeAgent = ptah.agent("judge"),
 	reviewInstructionFile = "doc.md",
 	dryRun = true,
-})
+}})
 print(ops, loop)
 "#,
+            mock = mock_bin()
+        )
+        .as_str(),
     );
     let (code, stdout, stderr) = p.check(&script, &lsp_dir);
     assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");

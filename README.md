@@ -660,8 +660,8 @@ write a shim — the only workflow code your repo owns:
 local openspec = require("./vendor/factory-components/components/openspec/component")
 
 local ops = openspec.new({
-	agent = "claude",       -- work agent (registry name)
-	judgeAgent = "claude",  -- judge agent (a small/fast model is ideal)
+	agent = ptah.agent("claude"),       -- work agent handle
+	judgeAgent = ptah.agent("claude"),  -- judge agent handle (a small/fast model is ideal)
 	model = "claude-opus-4-5",
 	judgeModel = "claude-haiku-4-5",
 })
@@ -675,9 +675,11 @@ The contract that makes the mount work anywhere:
   file and may traverse outside the shim's directory, and library
   modules only require within their own tree, so the mount location is
   your free choice (a read-only nix store path included).
-- **Data-only config** — every component field is data (strings,
-  numbers, booleans); functions are not configuration. Per-call data
-  (a change name, a PR URL) is a method argument.
+- **Data config plus agent handles** — every component field is data
+  (strings, numbers, booleans) or a ptah runtime handle the component's
+  config type declares (`agent: Agent`); functions are not
+  configuration. Per-call data (a change name, a PR URL) is a method
+  argument.
 - **`ptah check` is the compatibility gate** — every module is
   `--!strict` and every component exports its `Config` type, so your
   shim's config is type-checked against the component's type when you

@@ -9,8 +9,8 @@
 local openspec = require("../../factory-components/components/openspec/component")
 
 local opsx = openspec.new({
-	agent = "pi",
-	judgeAgent = "pi",
+	agent = ptah.agent("pi"),
+	judgeAgent = ptah.agent("pi"),
 	model = "zai/glm-5.3",
 	judgeModel = "zai/glm-5.3-flash",
 })

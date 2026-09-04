@@ -2,7 +2,8 @@
 
 One directory per workflow component: `components/<name>/` holds the
 facade module `component.luau` (exposing `new(config) -> instance`;
-config is data-only) and the component's README with its declared
+config is data plus declared ptah runtime handles) and the component's
+README with its declared
 environment requirements. The module file is `component.luau` — not
 `init.luau` — so ptah's require resolver and luau-lsp's resolve the
 module's internal `../../std/…` requires identically. See

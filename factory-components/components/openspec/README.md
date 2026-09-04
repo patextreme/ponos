@@ -10,8 +10,9 @@ holds, a human is needed, or the iteration cap is reached.
 This component drives an agent through the openspec workflow skills and
 the `openspec` CLI. Before running, verify the environment provides:
 
-- **Work agent carrying the openspec skills** — the agent named by
-  `agent` in your registry must have the openspec skill set installed
+- **Work agent carrying the openspec skills** — the agent you pass
+  as `agent` (a handle you construct, e.g. from a registry name or an
+  inline agent spec) must have the openspec skill set installed
   (`openspec-review`, `openspec-apply-change`,
   `openspec-verify-change`, and the archive lifecycle) and must be able
   to read and write your repository.
@@ -23,21 +24,22 @@ the `openspec` CLI. Before running, verify the environment provides:
 
 The component installs none of these itself.
 
-## Config (data-only)
+## Config (data plus declared agent handles)
 
 ```lua
 local openspec = require("<mount>/factory-components/components/openspec/component")
 
 local ops = openspec.new({
-	agent = "claude",       -- work agent (registry name)
-	judgeAgent = "claude",  -- judge agent (registry name)
+	agent = ptah.agent("claude"),       -- work agent handle
+	judgeAgent = ptah.agent("claude"),  -- judge agent handle
 	model = "opus",         -- optional: model config id for work sessions
 	judgeModel = "haiku",   -- optional: model config id for judge sessions
 	maxIterations = 10,     -- optional: convergence cap (default 10)
 })
 ```
 
-Functions are not configuration; every field is data.
+Functions are not configuration; every field is data or a declared
+agent handle.
 
 ## Operations
 
