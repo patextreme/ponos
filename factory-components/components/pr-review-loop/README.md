@@ -42,7 +42,8 @@ local loop = prReview.new({
 With `dryRun = true` the commit-and-push step is skipped entirely: the
 loop still reviews, judges, and fixes, but never pushes to the PR
 branch — a gate for rehearsing instruction changes against a real
-reviewer without touching the PR.
+reviewer without pushing. The converged session still posts the
+verdict comment: dry-run gates the branch, not the PR conversation.
 
 The component ships facade-only (`:review`). A `run()` daemon
 convenience (looping over open PRs) was deliberately deferred: it is

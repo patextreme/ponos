@@ -572,6 +572,44 @@ print("review-ok:" .. tostring(text ~= nil))
     );
 }
 
+#[test]
+fn pr_review_loop_dry_run_never_pushes_but_still_comments() {
+    // Same judge rules as the push test (converge on the second pass),
+    // with the dry-run gate on: the loop reviews, fixes, and converges,
+    // but the commit-and-push prompt must never reach the agent — while
+    // the converged session still posts the verdict comment (dry-run
+    // gates the branch, not the PR conversation; see the README).
+    let p = Project::new(
+        "pr-review-dry-run",
+        &[("MOCK_SUBMIT_MATCH", &converges_on_second_pass())],
+    );
+    let script = p.write(
+        "main.luau",
+        r#"--!strict
+local prReview = require("./vendor/factory-components/components/pr-review-loop/component")
+local loop = prReview.new({
+	agent = ptah.agent("demo"),
+	judgeAgent = ptah.agent("judge"),
+	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
+	dryRun = true,
+})
+local text = loop:review("https://github.com/example/example/pull/6")
+print("review-ok:" .. tostring(text ~= nil))
+"#,
+    );
+    let (code, stdout, stderr) = p.run(&script, &["--no-color"]);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("review-ok:true"), "stdout: {stdout}");
+    assert!(
+        !stdout.contains("push them to the PR branch"),
+        "dry-run must never send the commit-and-push prompt, stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("Please comment on the PR with the review feedback along with the verdict"),
+        "the converged session still posts the verdict comment in dry-run, stdout: {stdout}"
+    );
+}
+
 // ---------------------------------------------------------------------
 // Dogfooding: this repo's own .ptah/workflows/* shims (the consumer
 // pattern, byte for byte) run against the mock agent.
