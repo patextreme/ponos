@@ -1,7 +1,10 @@
 --!strict
--- Shim: openspec groom loop over the shared library (see
--- factory-components/README.md for the consumption model). The only
--- workflow code this repo owns.
+-- Shim: openspec lifecycle (groom/implement/verify) over the shared
+-- library (see factory-components/README.md for the consumption
+-- model). The only workflow code this repo owns.
+--
+-- ptah scripts take no runtime arguments, so the op and change name
+-- are hand-edited per use; one call active at a time.
 
 local openspec = require("../../factory-components/components/openspec/component")
 
@@ -12,4 +15,6 @@ local opsx = openspec.new({
 	judgeModel = "zai/glm-5.3-flash",
 })
 
+-- opsx:groom("factory-components")
+-- opsx:implement("factory-components")
 opsx:verify("factory-components")

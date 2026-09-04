@@ -15,7 +15,7 @@
 
 ## 3. Dogfood this repo
 
-- [x] 3.1 Rewrite `.ptah/workflows/openspec-groom.luau` and `.ptah/workflows/openspec-verify.luau` as shims requiring `factory-components/components/openspec` and verify the existing workflow behavior is preserved (manual run against the mock agent via the test suite)
+- [x] 3.1 Rewrite `.ptah/workflows/openspec-groom.luau` and `.ptah/workflows/openspec-verify.luau` as shims requiring `factory-components/components/openspec` and verify the existing workflow behavior is preserved (manual run against the mock agent via the test suite). *(As-built note: implemented as the two shims above, then consolidated into a single `.ptah/workflows/openspec.luau` exposing the full lifecycle in 7a63d32; behavior preservation stays covered by `tests/factory_components.rs`.)*
 - [x] 3.2 Rewrite `.ptah/workflows/pr-review-loop.luau` as a shim onto the pr-review-loop component (same verification)
 - [x] 3.3 Delete `.ptah/utils/` and verify `rg -l 'predicateAgent|gh.json' .ptah/` finds nothing — no second copy of judge or transport survives under `.ptah/`
 
