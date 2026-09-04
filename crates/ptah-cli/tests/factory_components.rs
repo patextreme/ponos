@@ -634,7 +634,7 @@ local loop = prReview.new({
 	agent = "demo",
 	judgeAgent = "judge",
 	repo = "example/example",
-	reviewInstruction = ".ptah/instructions/review-instruction.md",
+	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 })
 local text = loop:review("https://github.com/example/example/pull/6")
 print("review-ok:" .. tostring(text ~= nil))
@@ -667,16 +667,14 @@ fn workflow(name: &str) -> PathBuf {
 }
 
 #[test]
-fn dogfood_openspec_groom_shim_runs() {
-    let p = Project::new_env("dogfood-groom", "pi", &[("MOCK_SUBMIT_MATCH", &always(true))]);
-    let (code, _stdout, stderr) = p.run(&workflow("openspec-groom.luau"), &["--quiet"]);
-    assert_eq!(code, 0, "stderr:\n{stderr}");
-}
-
-#[test]
-fn dogfood_openspec_verify_shim_runs() {
-    let p = Project::new_env("dogfood-verify", "pi", &[("MOCK_SUBMIT_MATCH", &always(true))]);
-    let (code, stdout, stderr) = p.run(&workflow("openspec-verify.luau"), &["--no-color"]);
+fn dogfood_openspec_shim_runs() {
+    // The consolidated openspec shim (groom/verify merged in
+    // 7a63d32): the groom/implement/verify operations themselves are
+    // covered component-level above; this pins that the repo's actual
+    // shim runs against the mock — including the archive step of its
+    // verify call.
+    let p = Project::new_env("dogfood-openspec", "pi", &[("MOCK_SUBMIT_MATCH", &always(true))]);
+    let (code, stdout, stderr) = p.run(&workflow("openspec.luau"), &["--no-color"]);
     assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(
         stdout.contains("Please sync and archive the change"),
@@ -799,7 +797,7 @@ openspec.new({ agent = "demo", judgeAgnt = "demo" })
         "main.luau",
         r#"--!strict
 local prReview = require("./vendor/factory-components/components/pr-review-loop/component")
-prReview.new({ agent = "demo", judgeAgent = "demo", repo = "a/b", reviewInstruction = "x.md", dryRun = "yes" })
+prReview.new({ agent = "demo", judgeAgent = "demo", repo = "a/b", reviewInstructionFile = "x.md", dryRun = "yes" })
 "#,
     );
     let (code, _stdout, stderr) = p.check(&script, &lsp_dir);
@@ -822,7 +820,7 @@ local loop = prReview.new({
 	agent = "demo",
 	judgeAgent = "judge",
 	repo = "a/b",
-	reviewInstruction = "doc.md",
+	reviewInstructionFile = "doc.md",
 	dryRun = true,
 })
 print(ops, loop)

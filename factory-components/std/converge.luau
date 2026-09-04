@@ -59,8 +59,8 @@ local function converge(options: ConvergeOptions): ConvergeResult
 			session:setConfig("model", options.model)
 		end
 
-		local review = session:prompt(header .. options.prompt)
-		if predicate(options.judge, review.text, {
+		local outcome = session:prompt(header .. options.prompt)
+		if predicate(options.judge, outcome.text, {
 			agent = options.judgeAgent,
 			sessionId = `{options.sessionId}-judge:{iteration}`,
 			model = options.judgeModel,
@@ -69,7 +69,7 @@ local function converge(options: ConvergeOptions): ConvergeResult
 				session:prompt(header .. options.onConverged)
 			end
 			session:close()
-			return { iterations = iteration + 1, text = review.text }
+			return { iterations = iteration + 1, text = outcome.text }
 		end
 
 		local escalation = session:prompt(header .. options.escalationPrompt)

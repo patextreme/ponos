@@ -14,7 +14,7 @@ pr-review-loop.
   (typically via the `gh` CLI on the agent's PATH, with credentials in
   the agent subprocess's environment).
 - **The reviewer instruction document** — the repo-relative path given
-  by `reviewInstruction` must exist and be readable by the agent.
+  by `reviewInstructionFile` must exist and be readable by the agent.
 - **Judge agent** — any agent that can answer typed boolean prompts.
 
 ## Config (data-only)
@@ -28,7 +28,7 @@ local loop = prReview.new({
 	model = "opus",                      -- optional: work model id
 	judgeModel = "haiku",                -- optional: judge model id
 	repo = "owner/name",                 -- target repository
-	reviewInstruction = ".ptah/instructions/review-instruction.md",
+	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 	dryRun = false,                      -- optional: never push (default false)
 	maxIterations = 15,                  -- optional: cap (default 15)
 })
