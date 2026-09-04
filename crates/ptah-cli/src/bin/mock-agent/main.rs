@@ -58,6 +58,12 @@
 //! - `MOCK_SUBMIT`      — `|`-separated JSON values; each prompt calls the
 //!   `result_submit` tool of the `ptah` server with each value in order
 //!   (last one wins in ptah)
+//! - `MOCK_SUBMIT_MATCH` — JSON array of `{"match": "…", "value": …}`
+//!   rules; each prompt scans them in order and submits the value of
+//!   the first rule whose `match` substring occurs in the prompt text.
+//!   No matching rule → no submission (typed result stays nil), which
+//!   is how tests script judge retries and per-iteration verdicts from
+//!   one stateless mock. Takes precedence over `MOCK_SUBMIT`.
 //! - `MOCK_SUBMIT_ONCE` — with `MOCK_SUBMIT`, submit only on the first
 //!   prompt (fresh-slot-per-turn tests)
 //! - `MOCK_SUBMIT_BAD`  — number of invalid submissions (value from
@@ -858,45 +864,74 @@ async fn run_prompt(
     if let Some(client) = mcp.client("ptah") {
         let n = mcp.prompts.fetch_add(1, Ordering::SeqCst) + 1;
         let should_submit = !env_flag("MOCK_SUBMIT_ONCE") || n == 1;
+        // Prompt-content-keyed rules (MOCK_SUBMIT_MATCH): the first rule
+        // whose `match` substring occurs in the prompt text drives this
+        // turn's submission; no match submits nothing.
+        let match_rules: Option<Vec<serde_json::Value>> = std::env::var("MOCK_SUBMIT_MATCH")
+            .ok()
+            .filter(|r| !r.is_empty())
+            .map(|raw| {
+                serde_json::from_str(&raw)
+                    .expect("MOCK_SUBMIT_MATCH must be a JSON array of {match,value} rules")
+            });
         let attempted = should_submit
-            && (std::env::var("MOCK_SUBMIT").is_ok() || std::env::var("MOCK_SUBMIT_BAD").is_ok());
+            && (match_rules.is_some()
+                || std::env::var("MOCK_SUBMIT").is_ok()
+                || std::env::var("MOCK_SUBMIT_BAD").is_ok());
         let mut submitted_ok = false;
         if should_submit {
-            if let Ok(bad_count) = std::env::var("MOCK_SUBMIT_BAD") {
-                let bad_count: usize = bad_count.parse().unwrap_or(0);
-                let bad_value = std::env::var("MOCK_SUBMIT_BAD_VALUE")
-                    .ok()
-                    .and_then(|v| serde_json::from_str(&v).ok())
-                    .unwrap_or(serde_json::json!({}));
-                let needle = std::env::var("MOCK_SUBMIT_BAD_NEEDLE").ok();
-                for _ in 0..bad_count {
-                    let result = submit_result(&client, &bad_value).await;
-                    assert!(
-                        result.is_error == Some(true),
-                        "invalid submission should be a tool error, got: {:?}",
-                        result_text(&result)
-                    );
-                    let violations = result_text(&result);
-                    assert!(!violations.is_empty(), "violation text must not be empty");
-                    if let Some(needle) = &needle {
+            if let Some(rules) = &match_rules {
+                for rule in rules {
+                    let needle = rule.get("match").and_then(|v| v.as_str()).unwrap_or("");
+                    if text.contains(needle) {
+                        let value = rule.get("value").cloned().unwrap_or(serde_json::Value::Null);
+                        let result = submit_result(&client, &value).await;
                         assert!(
-                            violations.contains(needle.as_str()),
-                            "violation text must name the violation ({needle:?}), got: {violations:?}"
+                            result.is_error != Some(true),
+                            "matched submission should be accepted, got: {:?}",
+                            result_text(&result)
                         );
+                        submitted_ok = true;
+                        break;
                     }
                 }
-            }
-            if let Ok(values) = std::env::var("MOCK_SUBMIT") {
-                for raw in values.split('|') {
-                    let value: serde_json::Value =
-                        serde_json::from_str(raw).expect("MOCK_SUBMIT entries must be JSON");
-                    let result = submit_result(&client, &value).await;
-                    assert!(
-                        result.is_error != Some(true),
-                        "valid submission should be accepted, got: {:?}",
-                        result_text(&result)
-                    );
-                    submitted_ok = true;
+            } else {
+                if let Ok(bad_count) = std::env::var("MOCK_SUBMIT_BAD") {
+                    let bad_count: usize = bad_count.parse().unwrap_or(0);
+                    let bad_value = std::env::var("MOCK_SUBMIT_BAD_VALUE")
+                        .ok()
+                        .and_then(|v| serde_json::from_str(&v).ok())
+                        .unwrap_or(serde_json::json!({}));
+                    let needle = std::env::var("MOCK_SUBMIT_BAD_NEEDLE").ok();
+                    for _ in 0..bad_count {
+                        let result = submit_result(&client, &bad_value).await;
+                        assert!(
+                            result.is_error == Some(true),
+                            "invalid submission should be a tool error, got: {:?}",
+                            result_text(&result)
+                        );
+                        let violations = result_text(&result);
+                        assert!(!violations.is_empty(), "violation text must not be empty");
+                        if let Some(needle) = &needle {
+                            assert!(
+                                violations.contains(needle.as_str()),
+                                "violation text must name the violation ({needle:?}), got: {violations:?}"
+                            );
+                        }
+                    }
+                }
+                if let Ok(values) = std::env::var("MOCK_SUBMIT") {
+                    for raw in values.split('|') {
+                        let value: serde_json::Value =
+                            serde_json::from_str(raw).expect("MOCK_SUBMIT entries must be JSON");
+                        let result = submit_result(&client, &value).await;
+                        assert!(
+                            result.is_error != Some(true),
+                            "valid submission should be accepted, got: {:?}",
+                            result_text(&result)
+                        );
+                        submitted_ok = true;
+                    }
                 }
             }
         }

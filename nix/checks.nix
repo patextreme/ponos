@@ -72,10 +72,12 @@
     '';
 
     # Static-analysis gate for the Luau surface: every bundled script
-    # (examples, type-definition probe fixture) must pass luau-lsp in
+    # (examples, type-definition probe fixture, the Factory Components
+    # library, and this repo's own workflow shims) must pass luau-lsp in
     # strict mode (per-file --!strict directives; no committed .luaurc)
     # against the repo definitions (.ptah/ptah.d.luau). Keeps examples
-    # honest in the same direction as the runtime probe test.
+    # and the library honest in the same direction as the runtime probe
+    # test.
     checks.ptah-analyze = pkgs.stdenv.mkDerivation {
       pname = "ptah-analyze";
       version = commonArgs.version;
@@ -90,7 +92,10 @@
         runHook preCheck
         luau-lsp analyze --platform=standard \
           --definitions=.ptah/ptah.d.luau \
-          examples/*.luau examples/*/*.luau crates/ptah-cli/tests/fixtures/*.luau
+          examples/*.luau examples/*/*.luau crates/ptah-cli/tests/fixtures/*.luau \
+          factory-components/std/*.luau \
+          factory-components/components/*/component.luau \
+          .ptah/workflows/*.luau
         runHook postCheck
       '';
 

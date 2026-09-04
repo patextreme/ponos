@@ -30,13 +30,29 @@
       # Local runtime state and tooling configs — read from the
         # invocation dir at run time, never compile inputs — and nix/,
         # packaging only, so cargo builds stay insensitive to nix edits.
-        # One exception: .ptah/ also holds the checked-in type definitions,
-        # a genuine compile input (include_str! in src/cli.rs). Keeping
-        # the rest out means `nix run .` still does not rebuild when local
-        # .ptah scripts/config (or editor/agent scaffolding) change.
+        # Exceptions: inside .ptah/, the checked-in type definitions (a
+        # genuine compile input via include_str! in src/cli.rs) and the
+        # workflow shims (test-covered code — tests/factory_components.rs
+        # runs them against the mock agent, so they must survive in the
+        # sandbox source; the directory itself must pass the filter or
+        # the whole subtree is pruned); and the factory-components/
+        # library wholesale (same test-covered reasoning), whitelisted
+        # before the basename blocklist so the repo-root `openspec`
+        # spec-dir exclusion can never collide with a library directory
+        # (e.g. components/openspec). Keeping the rest of .ptah/ out
+        # means `nix run .` still does not rebuild when local .ptah
+        # scripts/config (or editor/agent scaffolding) change.
         if pkgs.lib.hasSuffix "/.ptah" path
         then type == "directory"
         else if pkgs.lib.hasSuffix "/.ptah/ptah.d.luau" path
+        then true
+        else if pkgs.lib.hasSuffix "/.ptah/workflows" path
+        then type == "directory"
+        else if pkgs.lib.hasInfix "/.ptah/workflows/" path
+        then pkgs.lib.hasSuffix ".luau" path
+        else if pkgs.lib.hasSuffix "/factory-components" path
+        then type == "directory"
+        else if pkgs.lib.hasInfix "/factory-components/" path
         then true
         else if pkgs.lib.hasInfix "/.ptah/" path
         then false

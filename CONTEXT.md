@@ -1,0 +1,44 @@
+# ptah
+
+A Luau-based CLI that drives ACP-speaking AI agents headlessly. This glossary
+covers the ptah context: the CLI, the workflow scripts, and the shared
+workflow library.
+
+## Language
+
+**Factory Components**:
+The shared workflow library maintained in this repo, consumable by any
+repository. Units of it are stdlib helpers and Components.
+_Avoid_: shared-workflow, bricks, lego, software factory
+
+**stdlib**:
+The repo-agnostic helper layer of Factory Components — transport, typed
+judging, retry, and loop machinery. Knows nothing about any consumer repo.
+_Avoid_: utils, lib, common
+
+**Component**:
+A reusable workflow capability that consumers compose and configure rather
+than fork — e.g. an openspec lifecycle or a PR review loop.
+_Avoid_: template, plugin, module (module means any Luau file)
+
+**Convergence loop**:
+The core workflow pattern: prompt an agent, judge the result with a typed
+predicate, and repeat with fixes until the predicate holds or the loop
+escalates to a human.
+_Avoid_: review loop, retry loop (those name specific uses of the pattern)
+
+**Shim**:
+The thin consumer-owned entry script that mounts Factory Components and hands
+it Local config. The only workflow code a consumer repo owns.
+_Avoid_: wrapper, bootstrap
+
+**Local config**:
+The data-only configuration table a consumer repo passes into a Component or
+stdlib call. Functions are not configuration.
+_Avoid_: settings, options file
+
+**Mount point**:
+The location in a consumer repo where the Factory Components tree is made
+available (symlink, submodule, vendored copy). Library code only requires
+within its own tree, so the mount point is the consumer's free choice.
+_Avoid_: vendor dir (that is one mounting mechanism, not the concept)
