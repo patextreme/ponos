@@ -5,11 +5,11 @@
 
 local openspec = require("../../factory-components/components/openspec/component")
 
-local ops = openspec.new({
+local opsx = openspec.new({
 	agent = "pi",
 	judgeAgent = "pi",
 	model = "zai/glm-5.3",
 	judgeModel = "zai/glm-5.3-flash",
 })
 
-ops:groom("cli-completions-and-init")
+opsx:verify("factory-components")

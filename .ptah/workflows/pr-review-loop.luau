@@ -11,7 +11,7 @@ local loop = prReview.new({
 	model = "zai/glm-5.3",
 	judgeModel = "zai/glm-5.3-flash",
 	repo = "patextreme/ptah",
-	reviewInstruction = ".ptah/instructions/review-instruction.md",
+	reviewInstructionFile = ".ptah/instructions/review-instruction.md",
 	dryRun = false,
 	maxIterations = 15,
 })

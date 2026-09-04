@@ -18,7 +18,7 @@ export type Config = {
 	repo: string,
 	-- Repository-relative path of the reviewer instruction document the
 	-- agent must follow.
-	reviewInstruction: string,
+	reviewInstructionFile: string,
 	-- When true the commit/push step is skipped: the loop converges on
 	-- reviews and fixes but never pushes to the PR branch.
 	dryRun: boolean?,
@@ -55,7 +55,7 @@ function M.new(config: Config): Instance
 				model = config.model,
 				judgeAgent = config.judgeAgent,
 				judgeModel = config.judgeModel,
-				prompt = `Use the review instruction at {config.reviewInstruction} to review PR {prUrl} in {config.repo}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`,
+				prompt = `Use the review instruction at {config.reviewInstructionFile} to review PR {prUrl} in {config.repo}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`,
 				judge = "The review verdict does not contain blocking issues",
 				onConverged = "Please comment on the PR with the review feedback along with the verdict",
 				escalationPrompt = "For each of the blocking issues, validate with a subagent whether the issue is real. For the blocking issues that remain, do you know how to resolve them, or do you need human input?",
