@@ -8,8 +8,10 @@
 
 local openspec = require("../../factory-components/components/openspec/component")
 
+local agent = ptah.agent("pi")
+
 local opsx = openspec.new({
-	agent = ptah.agent("pi"),
+	agent = agent,
 	judgeAgent = ptah.agent("pi"),
 	model = "zai/glm-5.3",
 	judgeModel = "zai/glm-5.3-flash",
@@ -21,7 +23,5 @@ opsx:groom(changeName)
 opsx:implement(changeName)
 opsx:verify(changeName)
 
-local agent = ptah.agent("pi")
 local session = agent:session({ id = "committer" })
 session:prompt("Commit the uncommitted changes and push to remote")
-
