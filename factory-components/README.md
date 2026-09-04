@@ -2,9 +2,10 @@
 
 The shared workflow library: repo-agnostic helper modules (`std/`) and
 composable workflow components (`components/`) that consumer repositories
-mount as source and drive through thin shims. See
-`docs/adr/0001-source-mounted-factory-components.md` for the distribution
-decision and `CONTEXT.md` for the vocabulary.
+mount as source and drive through thin shims. See the archived
+`factory-components` change
+(`openspec/changes/archive/2026-09-04-factory-components/`) for the
+distribution decision and `CONTEXT.md` for the vocabulary.
 
 ## Layout
 
@@ -16,8 +17,6 @@ decision and `CONTEXT.md` for the vocabulary.
   - `gh.luau` — GitHub CLI transport over `ptah.exec` with structured
     outcomes (never raises for a failed command) and POSIX-safe argument
     quoting.
-  - `converge.luau` — the convergence loop: prompt → judge → fix, with
-    first-class human escalation and an iteration cap.
   - `daemon.luau` — repo loop skeleton: apply a per-repo operation with
     per-repo error isolation, sequential or bounded-concurrency parallel.
 - `components/<name>/` — one directory per component: `component.luau`
@@ -30,6 +29,23 @@ decision and `CONTEXT.md` for the vocabulary.
   - `openspec/` — groom, implement, and verify an openspec change.
   - `pr-review-loop/` — review→fix→push convergence against a pull
     request.
+
+## Loop conventions
+
+std ships only mechanisms a third consumer would use verbatim
+(transport, typed verdicts, capped retry, isolation) — loop *shape* is
+component policy, so each component writes its convergence loop over
+`std/predicate` in exactly the shape its workflow needs. The components'
+loops share these conventions, documented here so drift stays visible:
+
+- Sessions: per-iteration work sessions are `<prefix>:<n>`, judge
+  sessions `<prefix>-judge:<n>`, and escalation-judge sessions
+  `<prefix>-human:<n>`.
+- Every prompt of a loop is prefixed `[<prefix> iteration N of M]` so
+  the agent (and the logs) can see the loop state.
+- Failure wording: `<prefix>: human input is required to resolve the
+  findings (iteration N of M)` and `<prefix>: did not converge within M
+  iterations`.
 
 ## The component contract
 

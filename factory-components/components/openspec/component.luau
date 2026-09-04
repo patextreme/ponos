@@ -1,10 +1,12 @@
 --!strict
 -- openspec component: groom, implement, and verify a named openspec
--- change, composed from std.converge (the review→judge→fix loop with
--- human escalation) and std.predicate. See README.md in this directory
--- for the declared environment requirements.
+-- change. Convergence is this component's own loop over std.predicate
+-- — prompt, judge, escalate to a human or fix, repeat, bounded by the
+-- iteration cap — following the shared loop conventions documented in
+-- ../README.md. See README.md in this directory for the declared
+-- environment requirements.
 
-local converge = require("../../std/converge")
+local predicate = require("../../std/predicate")
 
 export type Config = {
 	-- Work agent (name in the registry) driving the openspec skills.
@@ -36,21 +38,48 @@ local M = {}
 function M.new(config: Config): Instance
 	local maxIterations =
 		if config.maxIterations ~= nil then config.maxIterations else DEFAULT_MAX_ITERATIONS
+	local work: Agent = ptah.agent(config.agent)
 
+	-- Prompt, judge the output, escalate or fix, repeat — bounded.
 	local function drive(sessionId: string, prompt: string, judge: string): string
-		return converge.converge({
-			sessionId = sessionId,
-			agent = config.agent,
-			model = config.model,
-			judgeAgent = config.judgeAgent,
-			judgeModel = config.judgeModel,
-			prompt = prompt,
-			judge = judge,
-			escalationPrompt = "For the findings, do you know how to resolve them, or do you need human input?",
-			escalationJudge = "Human input is required to resolve the findings",
-			fix = "Go ahead and resolve the findings",
-			maxIterations = maxIterations,
-		}).text
+		for iteration = 0, maxIterations - 1 do
+			local header = `[{sessionId} iteration {iteration + 1} of {maxIterations}]\n`
+			local session: Session = work:session({ id = `{sessionId}:{iteration}` })
+			if config.model ~= nil then
+				session:setConfig("model", config.model)
+			end
+
+			local outcome = session:prompt(header .. prompt)
+			if predicate(judge, outcome.text, {
+				agent = config.judgeAgent,
+				model = config.judgeModel,
+				sessionId = `{sessionId}-judge:{iteration}`,
+			}) then
+				session:close()
+				return outcome.text
+			end
+
+			-- A judge-rejected pass probes for human input before any
+			-- fix: if a human is needed the operation fails here.
+			local probe = session:prompt(
+				header .. "For the findings, do you know how to resolve them, or do you need human input?"
+			)
+			local needsHuman = predicate("Human input is required to resolve the findings", probe.text, {
+				agent = config.judgeAgent,
+				model = config.judgeModel,
+				sessionId = `{sessionId}-human:{iteration}`,
+			})
+			if needsHuman then
+				session:close()
+				error(
+					`{sessionId}: human input is required to resolve the findings (iteration {iteration + 1} of {maxIterations})`
+				)
+			end
+
+			session:prompt(header .. "Go ahead and resolve the findings")
+			session:close()
+		end
+		return error(`{sessionId}: did not converge within {maxIterations} iterations`)
 	end
 
 	local instance: Instance = {

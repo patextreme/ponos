@@ -63,8 +63,10 @@ Shared conventions (documented in `factory-components/README.md` so drift
 stays visible): per-iteration work sessions `<prefix>:<n>`, judge sessions
 `<prefix>-judge:<n>`, escalation-judge sessions `<prefix>-human:<n>`, and
 every prompt prefixed `[<prefix> iteration N of M]` so agents and logs see
-loop state. Error wording: `{id}: human input is required to resolve the
-findings (iteration N)` / `{id}: did not converge within M iterations`.
+loop state. Error wording matches the deleted std loop verbatim
+(behavior parity, per task 1.1): `{id}: human input is required to
+resolve the findings (iteration N of M)` / `{id}: did not converge
+within M iterations`.
 
 ## Explicitly given up
 

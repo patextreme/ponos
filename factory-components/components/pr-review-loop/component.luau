@@ -2,9 +2,13 @@
 -- PR review loop component: run a review→fix→push convergence against a
 -- pull request, generalized from identus-ws's pr-review-loop — all repo
 -- specifics (reviewer instruction text, target repository, dry-run
--- gating) arrive as config. Composed from std.converge + std.predicate.
+-- gating) arrive as config. The loop is this component's own policy
+-- over std.predicate (following the shared conventions in ../README.md):
+-- escalation probes blocking findings with a subagent before asking,
+-- each fix is followed by a commit-and-push prompt, and the converged
+-- session posts the verdict comment.
 
-local converge = require("../../std/converge")
+local predicate = require("../../std/predicate")
 
 export type Config = {
 	-- Work agent (name in the registry) reviewing and fixing the PR.
@@ -40,30 +44,70 @@ function M.new(config: Config): Instance
 	local maxIterations =
 		if config.maxIterations ~= nil then config.maxIterations else DEFAULT_MAX_ITERATIONS
 	local dryRun = config.dryRun == true
+	local work: Agent = ptah.agent(config.agent)
 
 	local instance: Instance = {
 		review = function(_self: Instance, prUrl: string): string
-			local afterFix: string? = if dryRun
+			local push: string? = if dryRun
 				then nil
 				else "Commit the changes and push them to the PR branch so the next review sees them. Also comment on the PR with the review feedback."
 			if dryRun then
 				ptah.log(`pr-review-loop: dry run — fixes are not pushed to {prUrl}`)
 			end
-			return converge.converge({
-				sessionId = "pr-review",
-				agent = config.agent,
-				model = config.model,
-				judgeAgent = config.judgeAgent,
-				judgeModel = config.judgeModel,
-				prompt = `Use the review instruction at {config.reviewInstructionFile} to review PR {prUrl} in {config.repo}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`,
-				judge = "The review verdict does not contain blocking issues",
-				onConverged = "Please comment on the PR with the review feedback along with the verdict",
-				escalationPrompt = "For each of the blocking issues, validate with a subagent whether the issue is real. For the blocking issues that remain, do you know how to resolve them, or do you need human input?",
-				escalationJudge = "Human input is required to resolve the blocking issues",
-				fix = "Go ahead and resolve the blocking issues",
-				afterFix = afterFix,
-				maxIterations = maxIterations,
-			}).text
+
+			for iteration = 0, maxIterations - 1 do
+				local header = `[pr-review iteration {iteration + 1} of {maxIterations}]\n`
+				local session: Session = work:session({ id = `pr-review:{iteration}` })
+				if config.model ~= nil then
+					session:setConfig("model", config.model)
+				end
+
+				local outcome = session:prompt(
+					header
+						.. `Use the review instruction at {config.reviewInstructionFile} to review PR {prUrl} in {config.repo}. Based on the review feedback, determine the blocking issues and the non-blocking issues.`
+				)
+				if predicate("The review verdict does not contain blocking issues", outcome.text, {
+					agent = config.judgeAgent,
+					model = config.judgeModel,
+					sessionId = `pr-review-judge:{iteration}`,
+				}) then
+					-- The converged session posts the verdict comment.
+					session:prompt(header .. "Please comment on the PR with the review feedback along with the verdict")
+					session:close()
+					return outcome.text
+				end
+
+				-- Escalation probes the blocking findings with a subagent
+				-- before asking for a human; if a human is needed the
+				-- loop fails without issuing the fix.
+				local probe = session:prompt(
+					header
+						.. "For each of the blocking issues, validate with a subagent whether the issue is real. For the blocking issues that remain, do you know how to resolve them, or do you need human input?"
+				)
+				local needsHuman = predicate(
+					"Human input is required to resolve the blocking issues",
+					probe.text,
+					{
+						agent = config.judgeAgent,
+						model = config.judgeModel,
+						sessionId = `pr-review-human:{iteration}`,
+					}
+				)
+				if needsHuman then
+					session:close()
+					error(
+						`pr-review: human input is required to resolve the findings (iteration {iteration + 1} of {maxIterations})`
+					)
+				end
+
+				local fix = session:prompt(header .. "Go ahead and resolve the blocking issues")
+				ptah.log(`pr-review iteration {iteration + 1}: findings judged fixable — fix result: {fix.text}`)
+				if push ~= nil then
+					session:prompt(header .. push)
+				end
+				session:close()
+			end
+			return error(`pr-review: did not converge within {maxIterations} iterations`)
 		end,
 	}
 	return instance

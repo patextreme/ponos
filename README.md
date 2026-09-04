@@ -644,8 +644,8 @@ ptah run examples/sequential_review.luau
 
 [`factory-components/`](factory-components/) is the shared workflow
 library: repo-agnostic stdlib helpers (`std/`) — the typed boolean
-judge (`predicate`), the GitHub CLI transport (`gh`), the convergence
-loop (`converge`), and the repo-loop skeleton (`daemon`) — plus
+judge (`predicate`), the GitHub CLI transport (`gh`), and the repo-loop
+skeleton (`daemon`) — plus
 composable workflow components (`components/`) such as the openspec
 lifecycle and a PR review loop. This repo's own
 `.ptah/workflows/*.luau` are shims over it (dogfooding is what keeps
@@ -688,8 +688,9 @@ The contract that makes the mount work anywhere:
 See [`factory-components/README.md`](factory-components/README.md) for
 the full contract and each component's README for its declared
 environment requirements; the distribution decision (source mount, no
-registry, no lockfile) is recorded in
-[`docs/adr/0001-source-mounted-factory-components.md`](docs/adr/0001-source-mounted-factory-components.md).
+registry, no lockfile) is recorded in the archived
+[`factory-components`](openspec/changes/archive/2026-09-04-factory-components/)
+change.
 
 ## Development
 

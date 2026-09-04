@@ -355,146 +355,6 @@ print(o.stdout)
 }
 
 // ---------------------------------------------------------------------
-// std/converge — the convergence loop (four spec scenarios)
-// ---------------------------------------------------------------------
-
-/// Judge rules for a converge run: the review passes on its second pass
-/// (payloads carry the `[<id> iteration N of M]` header the loop
-/// prefixes every prompt with, and the mock echoes prompts back), the
-/// escalation predicate (its text is embedded in the judge prompt)
-/// never needs a human, and everything else fails.
-fn converges_on_second_pass() -> String {
-    r#"[{"match":"iteration 2","value":true},{"match":"Human input is required","value":false},{"match":"","value":false}]"#.to_string()
-}
-
-#[test]
-fn converge_passes_on_the_first_pass() {
-    let p = Project::new("converge-first-pass", &[("MOCK_SUBMIT_MATCH", &always(true))]);
-    let script = p.write(
-        "main.luau",
-        r#"--!strict
-local converge = require("./vendor/factory-components/std/converge")
-local result = converge.converge({
-	agent = "demo",
-	sessionId = "reviewer",
-	judgeAgent = "judge",
-	prompt = "Review the thing",
-	judge = "The review has no findings",
-	escalationPrompt = "Do you need human input for the findings?",
-	escalationJudge = "Human input is required",
-	fix = "Resolve the findings",
-	maxIterations = 3,
-})
-print("iterations=" .. tostring(result.iterations))
-"#,
-    );
-    let (code, stdout, stderr) = p.run(&script, &["--quiet"]);
-    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
-    assert!(
-        stdout.contains("iterations=1"),
-        "first-pass convergence must not issue a fix prompt, stdout: {stdout}"
-    );
-}
-
-#[test]
-fn converge_fixable_failure_converges() {
-    let p = Project::new(
-        "converge-fixable",
-        &[("MOCK_SUBMIT_MATCH", &converges_on_second_pass())],
-    );
-    let script = p.write(
-        "main.luau",
-        r#"--!strict
-local converge = require("./vendor/factory-components/std/converge")
-local result = converge.converge({
-	agent = "demo",
-	sessionId = "reviewer",
-	judgeAgent = "judge",
-	prompt = "Review the thing",
-	judge = "The review has no findings",
-	escalationPrompt = "Do you need human input for the findings?",
-	escalationJudge = "Human input is required",
-	fix = "Resolve the findings",
-	maxIterations = 3,
-})
-print("iterations=" .. tostring(result.iterations))
-"#,
-    );
-    let (code, stdout, stderr) = p.run(&script, &["--quiet"]);
-    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
-    assert!(
-        stdout.contains("iterations=2"),
-        "fixable failure must iterate once and then converge, stdout: {stdout}"
-    );
-}
-
-#[test]
-fn converge_human_escalation_fails_without_a_fix() {
-    // Review always rejected; escalation predicate always holds → the
-    // loop must fail with the human-input error instead of fixing.
-    let rules =
-        r#"[{"match":"Human input is required","value":true},{"match":"","value":false}]"#
-            .to_string();
-    let p = Project::new("converge-escalation", &[("MOCK_SUBMIT_MATCH", &rules)]);
-    let script = p.write(
-        "main.luau",
-        r#"--!strict
-local converge = require("./vendor/factory-components/std/converge")
-converge.converge({
-	agent = "demo",
-	sessionId = "reviewer",
-	judgeAgent = "judge",
-	prompt = "Review the thing",
-	judge = "The review has no findings",
-	escalationPrompt = "Do you need human input for the findings?",
-	escalationJudge = "Human input is required",
-	fix = "Resolve the findings",
-	maxIterations = 3,
-})
-"#,
-    );
-    let (code, _stdout, stderr) = p.run(&script, &["--quiet"]);
-    assert_eq!(code, 1, "stderr:\n{stderr}");
-    assert!(
-        stderr.contains("human input is required"),
-        "stderr: {stderr}"
-    );
-}
-
-#[test]
-fn converge_iteration_cap_fails() {
-    // Review always rejected, findings always fixable: the loop runs to
-    // the cap and reports it.
-    let rules =
-        r#"[{"match":"Human input is required","value":false},{"match":"","value":false}]"#
-            .to_string();
-    let p = Project::new("converge-cap", &[("MOCK_SUBMIT_MATCH", &rules)]);
-    let script = p.write(
-        "main.luau",
-        r#"--!strict
-local converge = require("./vendor/factory-components/std/converge")
-converge.converge({
-	agent = "demo",
-	sessionId = "reviewer",
-	judgeAgent = "judge",
-	prompt = "Review the thing",
-	judge = "The review has no findings",
-	escalationPrompt = "Do you need human input for the findings?",
-	escalationJudge = "Human input is required",
-	fix = "Resolve the findings",
-	maxIterations = 2,
-})
-"#,
-    );
-    let (code, _stdout, stderr) = p.run(&script, &["--quiet"]);
-    assert_eq!(code, 1, "stderr:\n{stderr}");
-    assert!(
-        stderr.contains("did not converge within 2 iterations"),
-        "stderr: {stderr}"
-    );
-}
-
-// ---------------------------------------------------------------------
 // std/daemon — the per-repo loop skeleton
 // ---------------------------------------------------------------------
 
@@ -554,6 +414,16 @@ fn daemon_parallel_survives_one_raising_repo() {
 // components/openspec — groom, implement, verify
 // ---------------------------------------------------------------------
 
+/// Judge rules for a component loop run: the second pass is accepted
+/// (prompts carry the `[<id> iteration N of M]` header and the mock
+/// echoes prompts back into the judge payload), the escalation
+/// predicate (its text is embedded in the judge prompt) never needs a
+/// human, and everything else fails. Shared by the openspec,
+/// pr-review-loop, and dogfood tests below.
+fn converges_on_second_pass() -> String {
+    r#"[{"match":"iteration 2","value":true},{"match":"Human input is required","value":false},{"match":"","value":false}]"#.to_string()
+}
+
 fn openspec_shim(p: &Project, op: &str) -> PathBuf {
     p.write(
         "main.luau",
@@ -609,6 +479,56 @@ fn openspec_component_verify_converges_then_archives() {
     assert!(
         stdout.contains("Please sync and archive the change demo-change"),
         "the archive prompt must reach the agent after convergence, stdout: {stdout}"
+    );
+}
+
+#[test]
+fn openspec_component_escalation_fails_without_a_fix() {
+    // Groom is judge-rejected and the escalation judge confirms human
+    // input is required: the operation must fail (exit 1) naming the
+    // human, without ever issuing the fix prompt.
+    let rules =
+        r#"[{"match":"Human input is required","value":true},{"match":"","value":false}]"#
+            .to_string();
+    let p = Project::new("openspec-escalation", &[("MOCK_SUBMIT_MATCH", &rules)]);
+    let script = openspec_shim(&p, "groom");
+    let (code, stdout, stderr) = p.run(&script, &["--no-color"]);
+    assert_eq!(code, 1, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stderr.contains("human input is required"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Go ahead and resolve the findings"),
+        "escalation must fail before the fix prompt reaches the agent, stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn openspec_component_iteration_cap_fails() {
+    // Every pass is judge-rejected and the findings stay fixable: the
+    // loop runs to the configured cap and reports it.
+    let rules =
+        r#"[{"match":"Human input is required","value":false},{"match":"","value":false}]"#
+            .to_string();
+    let p = Project::new("openspec-cap", &[("MOCK_SUBMIT_MATCH", &rules)]);
+    let script = p.write(
+        "main.luau",
+        r#"--!strict
+local openspec = require("./vendor/factory-components/components/openspec/component")
+local ops = openspec.new({
+	agent = "demo",
+	judgeAgent = "judge",
+	maxIterations = 2,
+})
+ops:groom("demo-change")
+"#,
+    );
+    let (code, _stdout, stderr) = p.run(&script, &["--quiet"]);
+    assert_eq!(code, 1, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("did not converge within 2 iterations"),
+        "stderr: {stderr}"
     );
 }
 

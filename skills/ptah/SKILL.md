@@ -169,8 +169,6 @@ source — nix flake input + symlink, submodule, or vendored copy):
   script error, never a hang)
 - `std/gh` — GitHub CLI transport over `ptah.exec` (structured
   outcomes, never raises for a failed command, POSIX-safe quoting)
-- `std/converge` — the convergence loop: prompt → judge → fix with
-  human escalation and an iteration cap
 - `std/daemon` — per-repo loop with error isolation (sequential or
   bounded parallel)
 - `components/openspec` — groom/implement/verify an openspec change

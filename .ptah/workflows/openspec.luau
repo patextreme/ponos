@@ -15,6 +15,6 @@ local opsx = openspec.new({
 	judgeModel = "zai/glm-5.3-flash",
 })
 
--- opsx:groom("factory-components")
--- opsx:implement("factory-components")
-opsx:verify("factory-components")
+opsx:groom("drop-converge-loop")
+opsx:implement("drop-converge-loop")
+opsx:verify("drop-converge-loop")
